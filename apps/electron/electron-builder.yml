@@ -1,6 +1,6 @@
-appId: com.lukilabs.craft-agent
-productName: Craft Agents
-copyright: Copyright © 2025 Craft Docs Ltd.
+appId: com.cloverhound.cloverhound-ai
+productName: CloverhoundAI
+copyright: Copyright © 2026 Cloverhound
 
 electronVersion: "39.2.7"
 
@@ -69,21 +69,21 @@ mac:
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-linux"
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-win32"
   # Use predictable naming for macOS packages (applies to zip; dmg uses its own config below)
-  artifactName: "Craft-Agent-${arch}.${ext}"
+  artifactName: "CloverhoundAI-${arch}.${ext}"
   # Code signing & notarization (disabled by default for local builds)
   # To enable: set CSC_LINK, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
   # notarize:
   #   teamId: ${APPLE_TEAM_ID}
 
 dmg:
-  # Use predictable naming: Craft-Agent-arm64.dmg, Craft-Agent-x64.dmg
-  artifactName: "Craft-Agent-${arch}.dmg"
+  # Use predictable naming: CloverhoundAI-arm64.dmg, CloverhoundAI-x64.dmg
+  artifactName: "CloverhoundAI-${arch}.dmg"
   # Custom background (multi-resolution TIFF with 1x+2x for retina support)
   background: resources/dmg-background.tiff
   # Use app icon as the mounted volume icon in Finder
   icon: resources/icon.icns
   iconSize: 80
-  title: "Craft Agents"
+  title: "CloverhoundAI"
   contents:
     - x: 130
       y: 200
@@ -101,8 +101,8 @@ win:
     - target: nsis
       arch:
         - x64
-  # Use predictable naming: Craft-Agent-x64.exe
-  artifactName: "Craft-Agent-${arch}.${ext}"
+  # Use predictable naming: CloverhoundAI-x64.exe
+  artifactName: "CloverhoundAI-${arch}.${ext}"
   files:
     # Exclude ripgrep binaries for other platforms
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-linux"
@@ -130,12 +130,12 @@ nsis:
 linux:
   icon: resources/icon.png
   category: Utility
-  maintainer: "Craft Docs Ltd. <support@craft.do>"
+  maintainer: "Cloverhound <support@cloverhound.com>"
   target:
     - target: AppImage
       arch:
         - x64
-  artifactName: "Craft-Agent-${arch}.${ext}"
+  artifactName: "CloverhoundAI-${arch}.${ext}"
   # Exclude ripgrep binaries for other platforms
   files:
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-darwin"

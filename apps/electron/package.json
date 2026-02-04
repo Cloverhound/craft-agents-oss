@@ -1,14 +1,14 @@
 {
-  "name": "@craft-agent/electron",
+  "name": "@cloverhound/ai",
   "version": "0.3.2",
-  "description": "Electron desktop app for Craft Agents",
+  "description": "CloverhoundAI desktop application",
   "main": "dist/main.cjs",
   "private": true,
   "author": {
-    "name": "Craft Docs Ltd.",
-    "email": "support@craft.do"
+    "name": "Cloverhound",
+    "email": "support@cloverhound.com"
   },
-  "homepage": "https://agents.craft.do",
+  "homepage": "https://cloverhound.com",
   "license": "MIT",
   "type": "module",
   "engines": {

@@ -3,8 +3,8 @@ interface CraftAgentsLogoProps {
 }
 
 /**
- * Craft Agents pixel art logo - uses accent color from theme
- * Apply text-accent class to get the brand purple color
+ * CloverhoundAI logo - uses accent color from theme
+ * Apply text-accent class to get the brand color
  */
 export function CraftAgentsLogo({ className }: CraftAgentsLogoProps) {
   return (

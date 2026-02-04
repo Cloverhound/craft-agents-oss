@@ -377,7 +377,7 @@ async function main(): Promise<void> {
   console.log("🚀 Starting Electron...\n");
 
   const electronProc = spawn({
-    cmd: [ELECTRON_BIN, "apps/electron"],
+    cmd: [ELECTRON_BIN, "apps/electron", "--remote-debugging-port=9222"],
     cwd: ROOT_DIR,
     stdin: "ignore",
     stdout: "inherit",

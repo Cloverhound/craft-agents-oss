@@ -31,7 +31,7 @@ export function CompletionStep({
         </div>
       ) : (
         <div className="flex size-16 items-center justify-center">
-          <CraftAgentsSymbol className="size-10 text-accent" />
+          <CraftAgentsSymbol className="size-10 text-[#1FB094]" />
         </div>
       )}
       title={isSaving ? 'Setting up...' : "You're all set!"}

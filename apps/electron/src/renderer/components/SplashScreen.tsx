@@ -36,7 +36,7 @@ export function SplashScreen({ isExiting, onExitComplete }: SplashScreenProps) {
           ease: [0.16, 1, 0.3, 1] // Exponential out curve
         }}
       >
-        <CraftAgentsSymbol className="h-8 text-accent" />
+        <CraftAgentsSymbol className="h-8 text-[#1FB094]" />
       </motion.div>
     </motion.div>
   )

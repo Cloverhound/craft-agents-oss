@@ -188,8 +188,8 @@ export function AppMenu({
       {/* Craft Logo Menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <TopBarButton aria-label="Craft menu">
-            <CraftAgentsSymbol className="h-4 text-accent" />
+          <TopBarButton aria-label="Craft menu" className="mt-0.5">
+            <CraftAgentsSymbol className="h-6 w-6 text-[#1FB094]" />
           </TopBarButton>
         </DropdownMenuTrigger>
         <StyledDropdownMenuContent align="start" minWidth="min-w-48">
@@ -299,7 +299,7 @@ export function AppMenu({
           {/* Quit */}
           <StyledDropdownMenuItem onClick={() => window.electronAPI.menuQuit()}>
             <Icons.LogOut className="h-3.5 w-3.5" />
-            Quit Craft Agents
+            Quit CloverhoundAI
             <DropdownMenuShortcut className="pl-6">{modKey}Q</DropdownMenuShortcut>
           </StyledDropdownMenuItem>
         </StyledDropdownMenuContent>

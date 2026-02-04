@@ -1367,7 +1367,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         (lowerMsg.includes('tool') && lowerMsg.includes('not') && lowerMsg.includes('support'))
       if (isToolSupportError) {
         const displayModel = modelName?.trim() || SUMMARIZATION_MODEL
-        return { success: false, error: `Model "${displayModel}" does not support tool/function calling. Craft Agent requires a model with tool support (e.g. Claude, GPT-4, Gemini).` }
+        return { success: false, error: `Model "${displayModel}" does not support tool/function calling. CloverhoundAI requires a model with tool support (e.g. Claude, GPT-4, Gemini).` }
       }
 
       // Model not found — always a failure. Since onboarding is the only place
