@@ -202,14 +202,12 @@ describe('CraftAgent.chat() - Basic Flow', () => {
     // Act
     await collectEvents(agent.chat('My test message'));
 
-    // Assert
-    const calls = mockQuery.getAllCalls();
-    expect(calls.length).toBe(1);
-
-    // The prompt should contain the user message
-    const prompt = calls[0].prompt;
-    expect(typeof prompt).toBe('string');
-    expect(prompt as string).toContain('My test message');
+    // Assert - with SessionRunner, message goes through the channel
+    const channelMessages = mockQuery.getChannelMessages();
+    expect(channelMessages.length).toBeGreaterThanOrEqual(1);
+    // SDKUserMessage format: { type: 'user', message: { role: 'user', content: '...' } }
+    const msgContent = (channelMessages[0] as any).message?.content;
+    expect(String(msgContent)).toContain('My test message');
 
     agent.dispose();
   });
@@ -307,13 +305,13 @@ describe('CraftAgent.chat() - Session Continuity', () => {
     // Act - First chat
     await collectEvents(agent.chat('First message'));
 
-    // Change the session ID for second message
-    mockQuery.resetCalls();
+    // Queue second turn's messages with different session ID
+    // Note: don't call resetCalls() - SessionRunner keeps the same query()
     mockQuery.setMessages(createSimpleTextResponseSequence('Hello again', TEST_SESSION_ID_2));
 
     await collectEvents(agent.chat('Second message'));
 
-    // Assert
+    // Assert - session ID callback should have been called with both IDs
     expect(sessionIdUpdates).toContain(TEST_SESSION_ID);
     expect(sessionIdUpdates).toContain(TEST_SESSION_ID_2);
 
@@ -494,13 +492,14 @@ describe('CraftAgent.chat() - Slash Commands', () => {
     // Act
     await collectEvents(agent.chat('/compact'));
 
-    // Assert
-    const calls = mockQuery.getAllCalls();
-    expect(calls.length).toBe(1);
+    // Assert - with SessionRunner, messages go through the channel
+    const channelMessages = mockQuery.getChannelMessages();
+    expect(channelMessages.length).toBeGreaterThanOrEqual(1);
 
     // Slash commands should be sent as-is, not wrapped in context
-    const prompt = calls[0].prompt;
-    expect(prompt).toBe('/compact');
+    // SDKUserMessage format: { type: 'user', message: { role: 'user', content: '...' } }
+    const content = (channelMessages[0] as any).message?.content;
+    expect(content).toBe('/compact');
 
     agent.dispose();
   });
@@ -518,13 +517,14 @@ describe('CraftAgent.chat() - Slash Commands', () => {
     // Act
     await collectEvents(agent.chat('Regular message'));
 
-    // Assert
-    const calls = mockQuery.getAllCalls();
-    const prompt = calls[0].prompt as string;
+    // Assert - with SessionRunner, messages go through the channel
+    const channelMessages = mockQuery.getChannelMessages();
+    expect(channelMessages.length).toBeGreaterThanOrEqual(1);
 
     // Regular messages should have context (date, working directory, etc.)
-    // The exact format may vary, but it should be longer than the raw message
-    expect(prompt.length).toBeGreaterThan('Regular message'.length);
+    // SDKUserMessage format: { type: 'user', message: { role: 'user', content: '...' } }
+    const content = String((channelMessages[0] as any).message?.content);
+    expect(content.length).toBeGreaterThan('Regular message'.length);
 
     agent.dispose();
   });
@@ -560,13 +560,14 @@ describe('CraftAgent.chat() - Binary Attachments', () => {
     // Act
     await collectEvents(agent.chat('What is in the file?', [textAttachment]));
 
-    // Assert
-    const calls = mockQuery.getAllCalls();
-    expect(calls.length).toBe(1);
+    // Assert - with SessionRunner, messages go through the channel
+    const channelMessages = mockQuery.getChannelMessages();
+    expect(channelMessages.length).toBeGreaterThanOrEqual(1);
 
-    // Text attachments should result in a string prompt (content inlined)
-    const prompt = calls[0].prompt;
-    expect(typeof prompt).toBe('string');
+    // Text attachments go through sendText which creates SDKUserMessage with string content
+    // SDKUserMessage format: { type: 'user', message: { role: 'user', content: '...' } }
+    const content = (channelMessages[0] as any).message?.content;
+    expect(typeof content).toBe('string');
 
     agent.dispose();
   });
@@ -590,13 +591,14 @@ describe('CraftAgent.chat() - Context Injection', () => {
     // Act
     await collectEvents(agent.chat('What time is it?'));
 
-    // Assert
-    const calls = mockQuery.getAllCalls();
-    const prompt = calls[0].prompt as string;
+    // Assert - with SessionRunner, messages go through the channel
+    const channelMessages = mockQuery.getChannelMessages();
+    expect(channelMessages.length).toBeGreaterThanOrEqual(1);
 
     // Should contain date context (exact format may vary)
-    // Looking for patterns like "date" or time-related content
-    expect(prompt.length).toBeGreaterThan('What time is it?'.length);
+    // SDKUserMessage format: { type: 'user', message: { role: 'user', content: '...' } }
+    const content = String((channelMessages[0] as any).message?.content);
+    expect(content.length).toBeGreaterThan('What time is it?'.length);
 
     agent.dispose();
   });
@@ -614,11 +616,14 @@ describe('CraftAgent.chat() - Context Injection', () => {
     // Act
     await collectEvents(agent.chat('Where am I?'));
 
-    // Assert
-    const calls = mockQuery.getAllCalls();
-    const options = calls[0].options as any;
+    // Assert - with SessionRunner, messages go through the channel
+    const channelMessages = mockQuery.getChannelMessages();
+    expect(channelMessages.length).toBeGreaterThanOrEqual(1);
 
-    // Working directory should be set in options
+    // Working directory should be set in SDK options
+    const calls = mockQuery.getAllCalls();
+    expect(calls.length).toBe(1);
+    const options = calls[0].options as any;
     expect(options.cwd).toBeDefined();
 
     agent.dispose();
@@ -631,7 +636,7 @@ describe('CraftAgent.chat() - Context Injection', () => {
 
 describe('CraftAgent.chat() - Multiple Messages', () => {
   it('handles consecutive messages correctly', async () => {
-    // Arrange
+    // Arrange - set up first turn's messages
     mockQuery.setMessages(createSimpleTextResponseSequence('First response', TEST_SESSION_ID));
 
     const agent = new CraftAgent({
@@ -641,18 +646,30 @@ describe('CraftAgent.chat() - Multiple Messages', () => {
     });
 
     // Act - First message
-    await collectEvents(agent.chat('First message'));
+    const firstEvents = await collectEvents(agent.chat('First message'));
 
-    // Reset for second message
-    mockQuery.reset();
+    // Queue second turn's messages (don't reset - SessionRunner reuses the query)
     mockQuery.setMessages(createSimpleTextResponseSequence('Second response', TEST_SESSION_ID));
 
-    // Second message
-    await collectEvents(agent.chat('Second message'));
+    // Second message - goes through the same persistent session
+    const secondEvents = await collectEvents(agent.chat('Second message'));
 
-    // Assert
+    // Assert - only ONE query() call for the whole session
     const calls = mockQuery.getAllCalls();
-    expect(calls.length).toBe(1); // Only second call after reset
+    expect(calls.length).toBe(1);
+
+    // Both messages should have gone through the channel
+    // SDKUserMessage format: { type: 'user', message: { role: 'user', content: '...' } }
+    const channelMessages = mockQuery.getChannelMessages();
+    expect(channelMessages.length).toBe(2);
+    expect(String((channelMessages[0] as any).message?.content)).toContain('First message');
+    expect(String((channelMessages[1] as any).message?.content)).toContain('Second message');
+
+    // Both turns should have produced text_delta events
+    const firstTextEvents = firstEvents.filter(e => e.type === 'text_delta');
+    const secondTextEvents = secondEvents.filter(e => e.type === 'text_delta');
+    expect(firstTextEvents.length).toBeGreaterThan(0);
+    expect(secondTextEvents.length).toBeGreaterThan(0);
 
     agent.dispose();
   });

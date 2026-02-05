@@ -37,6 +37,8 @@ export interface MockQueryInstance {
   getLastCallOptions: () => unknown | undefined;
   /** Get all calls to query() */
   getAllCalls: () => Array<{ prompt: unknown; options: unknown }>;
+  /** Get user messages sent through channel (for SessionRunner pattern) */
+  getChannelMessages: () => Array<{ type: string; content: unknown }>;
   /** Reset call history */
   resetCalls: () => void;
   /** Full reset - calls, messages, and options */
@@ -59,21 +61,92 @@ export function createMockQuery(): MockQueryInstance {
   let messages: SDKMessage[] = [];
   let options: MockQueryOptions = {};
   const calls: Array<{ prompt: unknown; options: unknown }> = [];
+  const channelMessages: Array<{ type: string; content: unknown }> = [];
+
+  // Helper to consume messages from a channel (AsyncIterable)
+  async function consumeChannel(channel: AsyncIterable<unknown>): Promise<void> {
+    try {
+      for await (const msg of channel) {
+        channelMessages.push(msg as { type: string; content: unknown });
+      }
+    } catch {
+      // Channel closed or error - this is expected when runner stops
+    }
+  }
+
+  // For multi-turn support: queue of message sets to yield for each turn
+  let turnMessageSets: SDKMessage[][] = [];
+  let isChannelBased = false;
+  let messageQueueResolver: ((msg: SDKMessage) => void) | null = null;
+  const messageQueue: SDKMessage[] = [];
+
+  // Queue a message to be yielded (for channel-based multi-turn)
+  function queueMessage(msg: SDKMessage): void {
+    if (messageQueueResolver) {
+      messageQueueResolver(msg);
+      messageQueueResolver = null;
+    } else {
+      messageQueue.push(msg);
+    }
+  }
+
+  // Wait for next message (for channel-based multi-turn)
+  function waitForMessage(): Promise<SDKMessage> {
+    return new Promise((resolve) => {
+      if (messageQueue.length > 0) {
+        resolve(messageQueue.shift()!);
+      } else {
+        messageQueueResolver = resolve;
+      }
+    });
+  }
 
   // Create the mock async generator
   async function* mockQueryGenerator(args: { prompt: unknown; options: unknown }) {
     calls.push(args);
     options.onQueryCalled?.(args);
 
+    // If prompt is an AsyncIterable (channel), this is a SessionRunner pattern
+    const prompt = args.prompt;
+    if (prompt && typeof prompt === 'object' && Symbol.asyncIterator in prompt) {
+      isChannelBased = true;
+      // Start consuming channel in background
+      consumeChannel(prompt as AsyncIterable<unknown>);
+      // Give time for the first message to be pushed
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+
     if (options.throwError) {
       throw options.throwError;
     }
 
+    // Yield initial messages
     for (const message of messages) {
       if (options.messageDelay) {
         await new Promise(resolve => setTimeout(resolve, options.messageDelay));
       }
       yield message;
+    }
+
+    // For channel-based pattern, keep yielding queued messages
+    // This supports multi-turn by allowing tests to queue more messages via setMessages
+    if (isChannelBased) {
+      while (true) {
+        // Check if there are queued message sets for next turns
+        if (turnMessageSets.length > 0) {
+          const nextSet = turnMessageSets.shift()!;
+          for (const message of nextSet) {
+            if (options.messageDelay) {
+              await new Promise(resolve => setTimeout(resolve, options.messageDelay));
+            }
+            yield message;
+          }
+        } else {
+          // Wait for more messages to be queued
+          const msg = await waitForMessage();
+          yield msg;
+        }
+      }
     }
   }
 
@@ -96,7 +169,16 @@ export function createMockQuery(): MockQueryInstance {
 
   return {
     setMessages: (newMessages: SDKMessage[]) => {
-      messages = newMessages;
+      // If already in channel-based mode, queue for next turn
+      if (isChannelBased && calls.length > 0) {
+        turnMessageSets.push(newMessages);
+        // Also queue individual messages to trigger iteration
+        for (const msg of newMessages) {
+          queueMessage(msg);
+        }
+      } else {
+        messages = newMessages;
+      }
     },
     setOptions: (newOptions: MockQueryOptions) => {
       options = { ...options, ...newOptions };
@@ -107,14 +189,22 @@ export function createMockQuery(): MockQueryInstance {
     },
     getLastCallOptions: () => calls[calls.length - 1]?.options,
     getAllCalls: () => [...calls],
+    /** Get user messages sent through channel (for SessionRunner pattern) */
+    getChannelMessages: () => [...channelMessages],
     resetCalls: () => {
       calls.length = 0;
+      channelMessages.length = 0;
     },
-    /** Full reset - calls, messages, and options */
+    /** Full reset - calls, messages, options, and multi-turn state */
     reset: () => {
       calls.length = 0;
+      channelMessages.length = 0;
       messages = [];
       options = {};
+      turnMessageSets.length = 0;
+      isChannelBased = false;
+      messageQueue.length = 0;
+      messageQueueResolver = null;
     },
     queryFn,
   };
