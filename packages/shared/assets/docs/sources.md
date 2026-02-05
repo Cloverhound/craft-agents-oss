@@ -245,7 +245,8 @@ Each source folder contains:
   "api": {
     "baseUrl": "https://api.example.com/",  // MUST have trailing slash
     "authType": "bearer" | "header" | "query" | "basic" | "none",
-    "headerName": "X-API-Key",      // For header auth
+    "headerName": "X-API-Key",      // For single-header auth
+    "headerNames": ["Header-1", "Header-2"],  // For multi-header auth (e.g., Datadog)
     "queryParam": "api_key",         // For query auth
     "authScheme": "Bearer"           // For bearer auth (default: "Bearer")
   },
@@ -389,6 +390,31 @@ REST APIs become flexible tools that Claude can call.
   }
 }
 ```
+
+**Multi-header authentication (multiple API keys):**
+
+Some APIs require multiple authentication headers (e.g., Datadog, Algolia, Cloudflare). Use `headerNames` instead of `headerName` to specify an array of header names:
+
+```json
+{
+  "type": "api",
+  "provider": "datadog",
+  "api": {
+    "baseUrl": "https://api.datadoghq.com/",
+    "authType": "header",
+    "headerNames": ["DD-API-KEY", "DD-APPLICATION-KEY"],
+    "testEndpoint": {
+      "method": "GET",
+      "path": "api/v1/validate"
+    }
+  }
+}
+```
+
+When `headerNames` is present:
+- The credential prompt shows multiple input fields, one per header
+- All headers are included in every API request
+- Credentials are stored as a JSON object mapping header names to values
 
 **Bearer token (Authorization header):**
 ```json
@@ -654,6 +680,11 @@ URL: `https://api.githubcopilot.com/mcp/`, **bearer auth** (PAT required - OAuth
 ### Exa (Search)
 Provider: `exa`, Type: `api`
 Base URL: `https://api.exa.ai`, header auth with `x-api-key`.
+
+### Datadog
+Provider: `datadog`, Type: `api`
+Base URL: `https://api.datadoghq.com/`, **multi-header auth** with `DD-API-KEY` and `DD-APPLICATION-KEY`.
+Get keys from [Datadog Organization Settings](https://app.datadoghq.com/organization-settings/api-keys).
 
 ### Brave Search
 Provider: `brave`, Type: `mcp`
