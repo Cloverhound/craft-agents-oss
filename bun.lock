@@ -82,8 +82,8 @@
       },
     },
     "apps/electron": {
-      "name": "@cloverhound/ai",
-      "version": "0.3.3",
+      "name": "@craft-agent/electron",
+      "version": "0.3.4",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
         "@craft-agent/mermaid": "workspace:*",
@@ -124,7 +124,7 @@
     },
     "apps/viewer": {
       "name": "@craft-agent/viewer",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
         "@craft-agent/ui": "workspace:*",
@@ -151,7 +151,7 @@
     },
     "packages/core": {
       "name": "@craft-agent/core",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "devDependencies": {
         "@types/uuid": "^11.0.0",
       },
@@ -163,7 +163,7 @@
     },
     "packages/mermaid": {
       "name": "@craft-agent/mermaid",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "dependencies": {
         "@dagrejs/dagre": "^1.1.8",
       },
@@ -173,7 +173,7 @@
     },
     "packages/shared": {
       "name": "@craft-agent/shared",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
         "@craft-agent/mermaid": "workspace:*",
@@ -198,7 +198,7 @@
     },
     "packages/ui": {
       "name": "@craft-agent/ui",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
         "@craft-agent/mermaid": "workspace:*",
@@ -402,9 +402,9 @@
 
     "@babel/types": ["@babel/types@7.29.0", "", { "dependencies": { "@babel/helper-string-parser": "^7.27.1", "@babel/helper-validator-identifier": "^7.28.5" } }, "sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A=="],
 
-    "@cloverhound/ai": ["@cloverhound/ai@workspace:apps/electron"],
-
     "@craft-agent/core": ["@craft-agent/core@workspace:packages/core"],
+
+    "@craft-agent/electron": ["@craft-agent/electron@workspace:apps/electron"],
 
     "@craft-agent/mermaid": ["@craft-agent/mermaid@workspace:packages/mermaid"],
 
@@ -2876,7 +2876,7 @@
 
     "@babel/highlight/chalk": ["chalk@2.4.2", "", { "dependencies": { "ansi-styles": "^3.2.1", "escape-string-regexp": "^1.0.5", "supports-color": "^5.3.0" } }, "sha512-Mti+f9lpJNcwF4tWV8/OrTTtF1gZi+f8FqlyAdouralcFWFQWF2+NgCHShjkCb+IFBLq9buZwE1xckQU4peSuQ=="],
 
-    "@cloverhound/ai/glob": ["glob@13.0.1", "", { "dependencies": { "minimatch": "^10.1.2", "minipass": "^7.1.2", "path-scurry": "^2.0.0" } }, "sha512-B7U/vJpE3DkJ5WXTgTpTRN63uV42DseiXXKMwG14LQBXmsdeIoHAPbU/MEo6II0k5ED74uc2ZGTC6MwHFQhF6w=="],
+    "@craft-agent/electron/glob": ["glob@13.0.1", "", { "dependencies": { "minimatch": "^10.1.2", "minipass": "^7.1.2", "path-scurry": "^2.0.0" } }, "sha512-B7U/vJpE3DkJ5WXTgTpTRN63uV42DseiXXKMwG14LQBXmsdeIoHAPbU/MEo6II0k5ED74uc2ZGTC6MwHFQhF6w=="],
 
     "@craft-agent/viewer/@vitejs/plugin-react": ["@vitejs/plugin-react@4.7.0", "", { "dependencies": { "@babel/core": "^7.28.0", "@babel/plugin-transform-react-jsx-self": "^7.27.1", "@babel/plugin-transform-react-jsx-source": "^7.27.1", "@rolldown/pluginutils": "1.0.0-beta.27", "@types/babel__core": "^7.20.5", "react-refresh": "^0.17.0" }, "peerDependencies": { "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0" } }, "sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA=="],
 
@@ -3192,7 +3192,7 @@
 
     "@babel/highlight/chalk/supports-color": ["supports-color@5.5.0", "", { "dependencies": { "has-flag": "^3.0.0" } }, "sha512-QjVjwdXIt408MIiAqCX4oUKsgU2EqAGzs2Ppkm4aQYbjm+ZEWEcW4SfFNTr4uMNZma0ey4f5lgLrkB0aX0QMow=="],
 
-    "@cloverhound/ai/glob/minimatch": ["minimatch@10.1.2", "", { "dependencies": { "@isaacs/brace-expansion": "^5.0.1" } }, "sha512-fu656aJ0n2kcXwsnwnv9g24tkU5uSmOlTjd6WyyaKm2Z+h1qmY6bAjrcaIxF/BslFqbZ8UBtbJi7KgQOZD2PTw=="],
+    "@craft-agent/electron/glob/minimatch": ["minimatch@10.1.2", "", { "dependencies": { "@isaacs/brace-expansion": "^5.0.1" } }, "sha512-fu656aJ0n2kcXwsnwnv9g24tkU5uSmOlTjd6WyyaKm2Z+h1qmY6bAjrcaIxF/BslFqbZ8UBtbJi7KgQOZD2PTw=="],
 
     "@craft-agent/viewer/@vitejs/plugin-react/@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.0-beta.27", "", {}, "sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA=="],
 

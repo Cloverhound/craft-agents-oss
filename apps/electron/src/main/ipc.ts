@@ -11,7 +11,7 @@ import { WindowManager } from './window-manager'
 import { registerOnboardingHandlers } from './onboarding'
 import { IPC_CHANNELS, type FileAttachment, type StoredAttachment, type AuthType, type ApiSetupInfo, type SendMessageOptions } from '../shared/types'
 import { readFileAttachment, perf, validateImageForClaudeAPI, IMAGE_LIMITS } from '@craft-agent/shared/utils'
-import { getAuthType, setAuthType, getPreferencesPath, getCustomModel, setCustomModel, getModel, setModel, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, getAnthropicBaseUrl, setAnthropicBaseUrl, loadStoredConfig, saveConfig, type Workspace, SUMMARIZATION_MODEL } from '@craft-agent/shared/config'
+import { getAuthType, setAuthType, getPreferencesPath, getCustomModel, setCustomModel, getModel, setModel, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, getAnthropicBaseUrl, setAnthropicBaseUrl, loadStoredConfig, saveConfig, resolveModelId, type Workspace, SUMMARIZATION_MODEL } from '@craft-agent/shared/config'
 import { getSessionAttachmentsPath, validateSessionId } from '@craft-agent/shared/sessions'
 import { loadWorkspaceSources, getSourcesBySlugs, type LoadedSource } from '@craft-agent/shared/sources'
 import { isValidThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
@@ -1308,7 +1308,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         testModel = userModel
       } else if (!trimmedUrl || trimmedUrl.includes('openrouter.ai') || trimmedUrl.includes('ai-gateway.vercel.sh')) {
         // Anthropic, OpenRouter, and Vercel are all Anthropic-compatible — same model IDs
-        testModel = SUMMARIZATION_MODEL
+        testModel = resolveModelId(SUMMARIZATION_MODEL)
       } else {
         // Custom endpoint with no model specified — can't test without knowing the model
         return { success: false, error: 'Please specify a model for custom endpoints' }
@@ -1366,8 +1366,8 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         lowerMsg.includes('tool use is not supported') ||
         (lowerMsg.includes('tool') && lowerMsg.includes('not') && lowerMsg.includes('support'))
       if (isToolSupportError) {
-        const displayModel = modelName?.trim() || SUMMARIZATION_MODEL
-        return { success: false, error: `Model "${displayModel}" does not support tool/function calling. CloverhoundAI requires a model with tool support (e.g. Claude, GPT-4, Gemini).` }
+        const displayModel = modelName?.trim() || resolveModelId(SUMMARIZATION_MODEL)
+        return { success: false, error: `Model "${displayModel}" does not support tool/function calling. Craft Agent requires a model with tool support (e.g. Claude, GPT-4, Gemini).` }
       }
 
       // Model not found — always a failure. Since onboarding is the only place
@@ -2003,16 +2003,16 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   // Skills (Workspace-scoped)
   // ============================================================
 
-  // Get all skills for a workspace
-  ipcMain.handle(IPC_CHANNELS.SKILLS_GET, async (_event, workspaceId: string) => {
-    ipcLog.info(`SKILLS_GET: Loading skills for workspace: ${workspaceId}`)
+  // Get all skills for a workspace (and optionally project-level skills from workingDirectory)
+  ipcMain.handle(IPC_CHANNELS.SKILLS_GET, async (_event, workspaceId: string, workingDirectory?: string) => {
+    ipcLog.info(`SKILLS_GET: Loading skills for workspace: ${workspaceId}${workingDirectory ? `, workingDirectory: ${workingDirectory}` : ''}`)
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) {
       ipcLog.error(`SKILLS_GET: Workspace not found: ${workspaceId}`)
       return []
     }
-    const { loadWorkspaceSkills } = await import('@craft-agent/shared/skills')
-    const skills = loadWorkspaceSkills(workspace.rootPath)
+    const { loadAllSkills } = await import('@craft-agent/shared/skills')
+    const skills = loadAllSkills(workspace.rootPath, workingDirectory)
     ipcLog.info(`SKILLS_GET: Loaded ${skills.length} skills from ${workspace.rootPath}`)
     return skills
   })

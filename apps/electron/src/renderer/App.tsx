@@ -219,6 +219,16 @@ export default function App() {
   // Compute if app is fully ready (all data loaded)
   const isFullyReady = appState === 'ready' && sessionsLoaded
 
+  // Compute workspace slug from rootPath for SDK skill qualification
+  // SDK expects "workspaceSlug:skillSlug" format, NOT UUID
+  const windowWorkspaceSlug = useMemo(() => {
+    if (!windowWorkspaceId) return null
+    const workspace = workspaces.find(w => w.id === windowWorkspaceId)
+    if (!workspace?.rootPath) return windowWorkspaceId // Fallback to ID
+    const pathParts = workspace.rootPath.split('/').filter(Boolean)
+    return pathParts[pathParts.length - 1] || windowWorkspaceId
+  }, [windowWorkspaceId, workspaces])
+
   // Trigger splash exit animation when fully ready
   useEffect(() => {
     if (isFullyReady && !splashExiting) {
@@ -791,8 +801,9 @@ export default function App() {
       // Step 4: Extract badges from mentions (sources/skills) with embedded icons
       // Badges are self-contained for display in UserMessageBubble and viewer
       // Merge with any externally provided badges (e.g., from EditPopover context badges)
-      const mentionBadges: ContentBadge[] = windowWorkspaceId
-        ? extractBadges(message, skills, sources, windowWorkspaceId)
+      // Use workspace slug (not UUID) for skill qualification - SDK expects "workspaceSlug:skillSlug"
+      const mentionBadges: ContentBadge[] = windowWorkspaceSlug
+        ? extractBadges(message, skills, sources, windowWorkspaceSlug)
         : []
       const badges: ContentBadge[] = [...(externalBadges || []), ...mentionBadges]
 
@@ -1185,6 +1196,7 @@ export default function App() {
     // and useSession(id) hook for individual sessions. This prevents memory leaks.
     workspaces,
     activeWorkspaceId: windowWorkspaceId,
+    activeWorkspaceSlug: windowWorkspaceSlug,
     currentModel,
     customModel,
     pendingPermissions,
@@ -1227,6 +1239,7 @@ export default function App() {
     // NOTE: sessions removed to prevent memory leaks - components use atoms instead
     workspaces,
     windowWorkspaceId,
+    windowWorkspaceSlug,
     currentModel,
     customModel,
     pendingPermissions,

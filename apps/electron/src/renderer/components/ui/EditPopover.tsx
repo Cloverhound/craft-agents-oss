@@ -925,18 +925,22 @@ export function EditPopover({
         <PopoverContent
             side={side}
             align={align}
-            className="p-0 overflow-visible"
-            style={{ background: 'transparent', border: 'none', boxShadow: 'none' }}
+            className="p-0"
+            style={{
+              width: containerSize.width,
+              height: containerSize.height,
+              background: 'transparent',
+              border: 'none',
+              boxShadow: 'none',
+            }}
             onInteractOutside={handleInteractOutside}
             onEscapeKeyDown={handleEscapeKeyDown}
           >
-            {/* Container */}
+            {/* Container - size inherited from PopoverContent for Radix collision detection */}
             <div
               ref={popoverRef}
-              className="relative bg-foreground-2 overflow-hidden"
+              className="relative bg-foreground-2 overflow-hidden w-full h-full"
               style={{
-                width: containerSize.width,
-                height: containerSize.height,
                 transform: `translate(${dragOffset.x}px, ${dragOffset.y}px)`,
                 borderRadius: 16,
                 boxShadow: '0 4px 24px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.05)',

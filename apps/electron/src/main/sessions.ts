@@ -61,6 +61,10 @@ function sanitizeForTitle(content: string): string {
   return content
     .replace(/<edit_request>[\s\S]*?<\/edit_request>/g, '') // Strip entire edit_request blocks
     .replace(/<[^>]+>/g, '')     // Strip remaining XML/HTML tags
+    .replace(/\[skill:(?:[\w-]+:)?[\w-]+\]/g, '')   // Strip [skill:...] mentions
+    .replace(/\[source:[\w-]+\]/g, '')                // Strip [source:...] mentions
+    .replace(/\[file:[^\]]+\]/g, '')                  // Strip [file:...] mentions
+    .replace(/\[folder:[^\]]+\]/g, '')                // Strip [folder:...] mentions
     .replace(/\s+/g, ' ')        // Collapse whitespace
     .trim()
 }
@@ -2545,8 +2549,18 @@ export class SessionManager {
       // AI generation will enhance it later, but we always have a title from the start
       const isFirstUserMessage = managed.messages.filter(m => m.role === 'user').length === 1
       if (isFirstUserMessage && !managed.name) {
-        // Sanitize message to remove XML blocks (e.g. <edit_request>) before using as title
-        const sanitized = sanitizeForTitle(message)
+        // Replace bracket mentions with their display labels (e.g. [skill:ws:commit] → "Commit")
+        // so titles show human-readable names instead of raw IDs
+        let titleSource = message
+        if (options?.badges) {
+          for (const badge of options.badges) {
+            if (badge.rawText && badge.label) {
+              titleSource = titleSource.replace(badge.rawText, badge.label)
+            }
+          }
+        }
+        // Sanitize: strip any remaining bracket mentions, XML blocks, tags
+        const sanitized = sanitizeForTitle(titleSource)
         const initialTitle = sanitized.slice(0, 50) + (sanitized.length > 50 ? '…' : '')
         managed.name = initialTitle
         this.persistSession(managed)
@@ -2559,7 +2573,7 @@ export class SessionManager {
         }, managed.workspace.id)
 
         // Generate AI title asynchronously (will update the initial title)
-        this.generateTitle(managed, message)
+        this.generateTitle(managed, sanitized)
       }
     }
 

@@ -1,7 +1,7 @@
 {
-  "name": "@cloverhound/ai",
-  "version": "0.3.3",
-  "description": "CloverhoundAI desktop application",
+  "name": "@craft-agent/electron",
+  "version": "0.3.4",
+  "description": "Electron desktop app for Craft Agents",
   "main": "dist/main.cjs",
   "private": true,
   "author": {
