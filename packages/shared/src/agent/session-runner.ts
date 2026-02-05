@@ -62,6 +62,18 @@ export interface SessionRunnerConfig {
 export type SessionRunnerState = 'idle' | 'starting' | 'active' | 'stopping' | 'stopped' | 'error';
 
 /**
+ * Error thrown when receiveUntilTurnComplete() is interrupted by forceStop().
+ * This is expected during plan submissions, auth requests, and user aborts —
+ * callers should handle it like an abort, not a session failure.
+ */
+export class ForceStopError extends Error {
+  constructor() {
+    super('Session force-stopped during iteration');
+    this.name = 'ForceStopError';
+  }
+}
+
+/**
  * Manages a persistent SDK streaming session.
  */
 export class SessionRunner {
@@ -204,6 +216,13 @@ export class SessionRunner {
 
     try {
       while (true) {
+        // Guard: forceStop() nullifies responseIterator from another tick.
+        // Without this check, calling .next() on null causes a TypeError that
+        // the error handler misinterprets as a session resume failure.
+        if (!this.responseIterator || this._state === 'stopped') {
+          throw new ForceStopError();
+        }
+
         const result = await this.responseIterator.next();
 
         if (result.done) {

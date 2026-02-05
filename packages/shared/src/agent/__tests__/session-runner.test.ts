@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import type { SDKMessage, Options } from '@anthropic-ai/claude-agent-sdk';
-import { SessionRunner, type SessionRunnerConfig } from '../session-runner.ts';
+import { SessionRunner, ForceStopError, type SessionRunnerConfig } from '../session-runner.ts';
 
 // Mock SDK message types for testing
 function createInitMessage(sessionId: string): SDKMessage {
@@ -180,6 +180,95 @@ describe('SessionRunner', () => {
       // First we'd need to mock start() to succeed
       // Then verify second start() throws
       // This is complex without full SDK mocking
+    });
+  });
+
+  describe('ForceStopError', () => {
+    it('is exported and can be instantiated', () => {
+      const err = new ForceStopError();
+      expect(err).toBeInstanceOf(Error);
+      expect(err).toBeInstanceOf(ForceStopError);
+      expect(err.name).toBe('ForceStopError');
+      expect(err.message).toBe('Session force-stopped during iteration');
+    });
+
+    it('can be caught with instanceof', () => {
+      try {
+        throw new ForceStopError();
+      } catch (e) {
+        expect(e instanceof ForceStopError).toBe(true);
+        expect(e instanceof Error).toBe(true);
+      }
+    });
+  });
+
+  describe('forceStop during iteration', () => {
+    it('throws ForceStopError when responseIterator is nullified', async () => {
+      const config: SessionRunnerConfig = {
+        options: {} as Options,
+      };
+      const runner = new SessionRunner(config);
+
+      // Simulate an active session by setting internal state directly
+      // (can't call start() without real SDK)
+      (runner as any)._state = 'active';
+      (runner as any).responseIterator = {
+        async next() {
+          // Simulate forceStop being called during await:
+          // nullify the iterator before returning
+          (runner as any).responseIterator = null;
+          (runner as any)._state = 'stopped';
+          return { done: false, value: createTextDeltaMessage('hello') };
+        },
+      };
+
+      const messages: SDKMessage[] = [];
+      let caughtError: Error | null = null;
+
+      try {
+        for await (const msg of runner.receiveUntilTurnComplete()) {
+          messages.push(msg);
+          // After receiving first message, the mock iterator already
+          // simulated forceStop — next iteration should throw ForceStopError
+        }
+      } catch (e) {
+        caughtError = e as Error;
+      }
+
+      expect(caughtError).toBeInstanceOf(ForceStopError);
+      // Should have received the one message before the stop
+      expect(messages.length).toBe(1);
+    });
+
+    it('throws ForceStopError when state is stopped before first iteration', async () => {
+      const config: SessionRunnerConfig = {
+        options: {} as Options,
+      };
+      const runner = new SessionRunner(config);
+
+      // Simulate active state with an iterator, then immediately forceStop
+      (runner as any)._state = 'active';
+      (runner as any).responseIterator = {
+        async next() {
+          return { done: false, value: createTextDeltaMessage('should not reach') };
+        },
+      };
+
+      // forceStop before iteration starts
+      runner.forceStop();
+
+      let caughtError: Error | null = null;
+      try {
+        for await (const _msg of runner.receiveUntilTurnComplete()) {
+          // Should not yield any messages
+        }
+      } catch (e) {
+        caughtError = e as Error;
+      }
+
+      // State is 'stopped' so receiveUntilTurnComplete throws the state check error
+      expect(caughtError).toBeTruthy();
+      expect(caughtError!.message).toContain('Cannot receive messages in state: stopped');
     });
   });
 

@@ -14,7 +14,7 @@ import { getCredentialManager } from '../credentials/index.ts';
 import { updatePreferences, loadPreferences, formatPreferencesForPrompt, type UserPreferences } from '../config/preferences.ts';
 import type { FileAttachment } from '../utils/files.ts';
 import { debug } from '../utils/debug.ts';
-import { SessionRunner } from './session-runner.ts';
+import { SessionRunner, ForceStopError } from './session-runner.ts';
 import { HeartbeatManager, readHeartbeat, isHeartbeatActive } from '../sessions/heartbeat.ts';
 import {
   getSessionPlansDir,
@@ -2469,6 +2469,19 @@ export class CraftAgent {
       } catch (sdkError) {
         // Debug: log inner catch trigger (stderr to avoid SDK JSON pollution)
         console.error(`[CraftAgent] INNER CATCH triggered: ${sdkError instanceof Error ? sdkError.message : String(sdkError)}`);
+
+        // Handle force-stop (plan submission, auth request, user abort via forceStop).
+        // ForceStopError is thrown by SessionRunner when forceStop() nullifies the
+        // iterator mid-iteration. Treat it identically to AbortError.
+        if (sdkError instanceof ForceStopError) {
+          const reason = this.lastAbortReason;
+          this.lastAbortReason = null;
+          if (reason === AbortReason.UserStop) {
+            yield { type: 'status', message: 'Interrupted' };
+          }
+          yield { type: 'complete' };
+          return;
+        }
 
         // Handle user interruption
         if (sdkError instanceof AbortError) {
