@@ -17,9 +17,19 @@ import { CopyButton } from './CopyButton'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
 
-// Configure pdf.js worker using Vite's ?url import for cross-platform dev/prod compatibility
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
-pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker
+// Configure pdf.js worker
+// In test environments (bun test), use inline worker. In production (Vite), use the worker file.
+// The ?url import is Vite-specific and fails in bun's test environment.
+if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+  // In test environment, use inline worker (no external file needed)
+  pdfjs.GlobalWorkerOptions.workerSrc = ''
+} else {
+  // In production/dev, dynamically import the worker URL
+  // This is evaluated at runtime, avoiding the ?url import at parse time
+  import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+    .then(mod => { pdfjs.GlobalWorkerOptions.workerSrc = mod.default })
+    .catch(() => { /* fallback to inline worker */ })
+}
 
 export interface PDFPreviewOverlayProps {
   isOpen: boolean
