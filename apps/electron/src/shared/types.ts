@@ -1104,6 +1104,12 @@ export interface WorkspaceSettings {
   workingDirectory?: string
   /** Whether local (stdio) MCP servers are enabled */
   localMcpEnabled?: boolean
+  /**
+   * Default chat filter shown when the app starts (sidebar landing view).
+   * Format: 'allChats' | 'flagged' | 'state:{statusId}' | 'label:{labelId}' | 'view:{viewId}'
+   * Undefined = 'allChats' (default behaviour).
+   */
+  defaultChatFilter?: string
 }
 
 /**
@@ -1359,6 +1365,49 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
 
   // Simple filter key
   return parseChatsKey(key)
+}
+
+/**
+ * Parse a defaultChatFilter string into a ChatFilter object.
+ * Returns null if the string is invalid.
+ *
+ * Supported formats:
+ * - 'allChats'
+ * - 'flagged'
+ * - 'state:{statusId}'
+ * - 'label:{labelId}'
+ * - 'view:{viewId}'
+ */
+export const parseDefaultChatFilter = (filterStr: string | undefined): ChatFilter | null => {
+  if (!filterStr) return null
+  if (filterStr === 'allChats') return { kind: 'allChats' }
+  if (filterStr === 'flagged') return { kind: 'flagged' }
+  if (filterStr.startsWith('state:')) {
+    const stateId = filterStr.slice(6)
+    if (stateId) return { kind: 'state', stateId }
+  }
+  if (filterStr.startsWith('label:')) {
+    const labelId = filterStr.slice(6)
+    if (labelId) return { kind: 'label', labelId }
+  }
+  if (filterStr.startsWith('view:')) {
+    const viewId = filterStr.slice(5)
+    if (viewId) return { kind: 'view', viewId }
+  }
+  return null
+}
+
+/**
+ * Serialize a ChatFilter object to the string format used in defaultChatFilter.
+ */
+export const serializeChatFilter = (filter: ChatFilter): string => {
+  switch (filter.kind) {
+    case 'allChats': return 'allChats'
+    case 'flagged': return 'flagged'
+    case 'state': return `state:${filter.stateId}`
+    case 'label': return `label:${filter.labelId}`
+    case 'view': return `view:${filter.viewId}`
+  }
 }
 
 declare global {

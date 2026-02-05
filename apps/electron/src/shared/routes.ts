@@ -164,3 +164,34 @@ export const routes = {
 export type ActionRoute = ReturnType<(typeof routes.action)[keyof typeof routes.action]>
 export type ViewRoute = ReturnType<(typeof routes.view)[keyof typeof routes.view]>
 export type Route = ActionRoute | ViewRoute
+
+/**
+ * Build a view route for the workspace's default chat filter.
+ *
+ * @param defaultChatFilter - Serialized filter string from workspace settings
+ *   (e.g., 'allChats', 'flagged', 'state:todo', 'label:bug')
+ * @param sessionId - Optional session ID to include in the route
+ * @returns A typed Route string pointing to the correct filter view
+ */
+export function buildDefaultViewRoute(defaultChatFilter: string | undefined, sessionId?: string): Route {
+  if (!defaultChatFilter || defaultChatFilter === 'allChats') {
+    return routes.view.allChats(sessionId) as Route
+  }
+  if (defaultChatFilter === 'flagged') {
+    return routes.view.flagged(sessionId) as Route
+  }
+  if (defaultChatFilter.startsWith('state:')) {
+    const stateId = defaultChatFilter.slice(6)
+    if (stateId) return routes.view.state(stateId, sessionId) as Route
+  }
+  if (defaultChatFilter.startsWith('label:')) {
+    const labelId = defaultChatFilter.slice(6)
+    if (labelId) return routes.view.label(labelId, sessionId) as Route
+  }
+  if (defaultChatFilter.startsWith('view:')) {
+    const viewId = defaultChatFilter.slice(5)
+    if (viewId) return routes.view.view(viewId, sessionId) as Route
+  }
+  // Fallback to allChats for unrecognized formats
+  return routes.view.allChats(sessionId) as Route
+}

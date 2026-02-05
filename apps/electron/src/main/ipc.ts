@@ -1454,6 +1454,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       thinkingLevel: config?.defaults?.thinkingLevel,
       workingDirectory: config?.defaults?.workingDirectory,
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
+      defaultChatFilter: config?.defaults?.defaultChatFilter,
     }
   })
 
@@ -1463,7 +1464,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     const workspace = getWorkspaceOrThrow(workspaceId)
 
     // Validate key is a known workspace setting
-    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled']
+    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled', 'defaultChatFilter']
     if (!validKeys.includes(key)) {
       throw new Error(`Invalid workspace setting key: ${key}. Valid keys: ${validKeys.join(', ')}`)
     }

@@ -24,6 +24,7 @@ import { useSession } from '@/hooks/useSession'
 import { useUpdateChecker } from '@/hooks/useUpdateChecker'
 import { NavigationProvider } from '@/contexts/NavigationContext'
 import { navigate, routes } from './lib/navigate'
+import { buildDefaultViewRoute } from '../shared/routes'
 import { stripMarkdown } from './utils/text'
 import { initRendererPerf } from './lib/perf'
 import { DEFAULT_MODEL } from '@config/models'
@@ -212,6 +213,9 @@ export default function App() {
   // Notifications enabled state (from app settings)
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
 
+  // Default chat filter from workspace settings (loaded early for NavigationProvider)
+  const [defaultChatFilter, setDefaultChatFilter] = useState<string | undefined>(undefined)
+
   // Sources and skills for badge extraction
   const sources = useAtomValue(sourcesAtom)
   const skills = useAtomValue(skillsAtom)
@@ -343,14 +347,26 @@ export default function App() {
     initialize()
   }, [])
 
+  // Load defaultChatFilter from workspace settings early (before NavigationProvider initializes)
+  useEffect(() => {
+    if (!windowWorkspaceId) return
+    window.electronAPI.getWorkspaceSettings(windowWorkspaceId).then((settings) => {
+      if (settings?.defaultChatFilter) {
+        setDefaultChatFilter(settings.defaultChatFilter)
+      }
+    }).catch((err) => {
+      console.error('[App] Failed to load workspace settings for default filter:', err)
+    })
+  }, [windowWorkspaceId])
+
   // Session selection state
   const [, setSession] = useSession()
 
   // Notification system - shows native OS notifications and badge count
   const handleNavigateToSession = useCallback((sessionId: string) => {
-    // Navigate to the session via central routing (uses allChats filter)
-    navigate(routes.view.allChats(sessionId))
-  }, [])
+    // Navigate to the session via central routing (uses workspace default filter)
+    navigate(buildDefaultViewRoute(defaultChatFilter, sessionId))
+  }, [defaultChatFilter])
 
   const { isWindowFocused, showSessionNotification } = useNotifications({
     workspaceId: windowWorkspaceId,
@@ -392,7 +408,7 @@ export default function App() {
       if (initialSessionId && windowWorkspaceId) {
         const session = loadedSessions.find(s => s.id === initialSessionId)
         if (session) {
-          navigate(routes.view.allChats(session.id))
+          navigate(buildDefaultViewRoute(defaultChatFilter, session.id))
         }
       }
     })
@@ -970,13 +986,13 @@ export default function App() {
     }
 
     // Navigate to the chat view - this sets both selectedSession and activeView
-    navigate(routes.view.allChats(session.id))
+    navigate(buildDefaultViewRoute(defaultChatFilter, session.id))
 
     // Pre-fill input if provided (after a small delay to ensure component is mounted)
     if (params.input) {
       setTimeout(() => handleInputChange(session.id, params.input!), 100)
     }
-  }, [windowWorkspaceId, handleCreateSession, handleInputChange])
+  }, [windowWorkspaceId, handleCreateSession, handleInputChange, defaultChatFilter])
 
   const handleRespondToPermission = useCallback(async (sessionId: string, requestId: string, allowed: boolean, alwaysAllow: boolean) => {
     console.log('[App] handleRespondToPermission called:', { sessionId, requestId, allowed, alwaysAllow })
@@ -1135,37 +1151,48 @@ export default function App() {
       // 1. Update the main process's window-workspace mapping
       await window.electronAPI.switchWorkspace(workspaceId)
 
-      // 2. Update React state to trigger re-renders
+      // 2. Load the new workspace's settings to get its default chat filter
+      let newDefaultFilter: string | undefined
+      try {
+        const newSettings = await window.electronAPI.getWorkspaceSettings(workspaceId)
+        newDefaultFilter = newSettings?.defaultChatFilter
+        setDefaultChatFilter(newDefaultFilter)
+      } catch {
+        // Fall back to allChats if settings can't be loaded
+        setDefaultChatFilter(undefined)
+      }
+
+      // 3. Update React state to trigger re-renders
       setWindowWorkspaceId(workspaceId)
 
-      // 3. Clear selected session - the old session belongs to the previous workspace
+      // 4. Clear selected session - the old session belongs to the previous workspace
       // and should not remain selected when switching to a new workspace.
       // This prevents showing stale session data from the wrong workspace.
       setSession({ selected: null })
 
-      // 4. Navigate to allChats view without a specific session selected
+      // 5. Navigate to workspace's default view without a specific session selected
       // This ensures the UI is in a clean state for the new workspace
-      navigate(routes.view.allChats())
+      navigate(buildDefaultViewRoute(newDefaultFilter))
 
-      // 5. Clear pending permissions/credentials (not relevant to new workspace)
+      // 6. Clear pending permissions/credentials (not relevant to new workspace)
       setPendingPermissions(new Map())
       setPendingCredentials(new Map())
 
-      // 6. Clear session options from previous workspace
+      // 7. Clear session options from previous workspace
       // (session IDs are unique UUIDs, but clearing prevents unbounded memory growth
       // and ensures no stale state from old workspace persists)
       setSessionOptions(new Map())
 
-      // 7. Clear message drafts from previous workspace
+      // 8. Clear message drafts from previous workspace
       // (prevents memory growth on repeated workspace switches)
       sessionDraftsRef.current.clear()
 
-      // 8. Reset sources and skills atoms to empty
+      // 9. Reset sources and skills atoms to empty
       // (prevents stale data flash during workspace switch - AppShell will reload)
       store.set(sourcesAtom, [])
       store.set(skillsAtom, [])
 
-      // 9. Clear session atoms BEFORE navigating
+      // 10. Clear session atoms BEFORE navigating
       // This prevents applyNavigationState from auto-selecting a session from the old workspace.
       // Without this, getFirstSessionId() would return a session ID from the previous workspace,
       // causing the detail panel to show a stale chat until sessions reload.
@@ -1358,6 +1385,7 @@ export default function App() {
           onCreateSession={handleCreateSession}
           onInputChange={handleInputChange}
           isReady={appState === 'ready'}
+          defaultChatFilter={defaultChatFilter}
         >
           {/* Handle window close requests (X button, Cmd+W) - close modal first if open */}
           <WindowCloseHandler />

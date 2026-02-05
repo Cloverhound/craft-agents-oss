@@ -46,6 +46,12 @@ export interface WorkspaceConfig {
     workingDirectory?: string;
     thinkingLevel?: ThinkingLevel; // Default thinking level ('off', 'think', 'max') - default: 'think'
     colorTheme?: string; // Color theme override for this workspace (preset ID). Undefined = inherit from app default.
+    /**
+     * Default chat filter shown when the app starts (sidebar landing view).
+     * Format: 'allChats' | 'flagged' | 'state:{statusId}' | 'label:{labelId}' | 'view:{viewId}'
+     * Undefined = 'allChats' (default behaviour).
+     */
+    defaultChatFilter?: string;
   };
 
   /**

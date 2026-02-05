@@ -41,7 +41,7 @@ import {
   buildUrlWithState,
   type ParsedRoute,
 } from '../../shared/route-parser'
-import { routes, type Route } from '../../shared/routes'
+import { routes, buildDefaultViewRoute, type Route } from '../../shared/routes'
 import { NAVIGATE_EVENT } from '../lib/navigate'
 import type {
   DeepLinkNavigation,
@@ -58,6 +58,7 @@ import {
   isSettingsNavigation,
   isSkillsNavigation,
   DEFAULT_NAVIGATION_STATE,
+  parseDefaultChatFilter,
 } from '../../shared/types'
 import { sessionMetaMapAtom, updateSessionMetaAtom, type SessionMeta } from '@/atoms/sessions'
 import { sourcesAtom } from '@/atoms/sources'
@@ -92,6 +93,10 @@ interface NavigationContextValue {
   toggleRightSidebar: (panel?: RightSidebarPanel) => void
   /** Navigate to a source (or source list if no slug), preserving the current filter type */
   navigateToSource: (sourceSlug?: string) => void
+  /** Build a view route for the workspace's default chat filter (respects workspace settings) */
+  defaultViewRoute: (sessionId?: string) => Route
+  /** The parsed default ChatFilter from workspace settings (null = allChats) */
+  defaultFilter: ChatFilter
 }
 
 const NavigationContext = createContext<NavigationContextValue | null>(null)
@@ -106,6 +111,12 @@ interface NavigationProviderProps {
   onInputChange?: (sessionId: string, value: string) => void
   /** Whether the app is ready to navigate */
   isReady?: boolean
+  /**
+   * Default chat filter from workspace settings.
+   * Format: 'allChats' | 'flagged' | 'state:{statusId}' | 'label:{labelId}' | 'view:{viewId}'
+   * Used as the initial filter when no route is in the URL.
+   */
+  defaultChatFilter?: string
 }
 
 export function NavigationProvider({
@@ -114,6 +125,7 @@ export function NavigationProvider({
   onCreateSession,
   onInputChange,
   isReady = true,
+  defaultChatFilter,
 }: NavigationProviderProps) {
   const [, setSession] = useSession()
 
@@ -129,7 +141,14 @@ export function NavigationProvider({
   const skills = useAtomValue(skillsAtom)
 
   // UNIFIED NAVIGATION STATE - single source of truth for all 3 panels
-  const [navigationState, setNavigationState] = useState<NavigationState>(DEFAULT_NAVIGATION_STATE)
+  // Use workspace default chat filter if configured, otherwise fall back to allChats
+  const [navigationState, setNavigationState] = useState<NavigationState>(() => {
+    const parsedFilter = parseDefaultChatFilter(defaultChatFilter)
+    if (parsedFilter) {
+      return { navigator: 'chats', filter: parsedFilter, details: null }
+    }
+    return DEFAULT_NAVIGATION_STATE
+  })
 
   // Track history state for back/forward buttons
   const [canGoBack, setCanGoBack] = useState(false)
@@ -264,11 +283,12 @@ export function NavigationProvider({
             await window.electronAPI.sessionCommand(session.id, { type: 'setLabels', labels: [parsed.params.label] })
           }
 
-          // Determine navigation filter — preserve status/label context if the new session was created with one
+          // Determine navigation filter — preserve status/label context if the new session was created with one,
+          // otherwise use the workspace default filter
           const filter: import('../../shared/types').ChatFilter =
             parsed.params.status ? { kind: 'state', stateId: parsed.params.status } :
             parsed.params.label ? { kind: 'label', labelId: parsed.params.label } :
-            { kind: 'allChats' }
+            defaultFilter
 
           setSession({ selected: session.id })
           setNavigationState({
@@ -700,6 +720,21 @@ export function NavigationProvider({
     previousWorkspaceIdRef.current = workspaceId
   }, [workspaceId])
 
+  // Parse workspace default chat filter into a ChatFilter object
+  const defaultFilter: ChatFilter = useMemo(() => {
+    return parseDefaultChatFilter(defaultChatFilter) ?? { kind: 'allChats' }
+  }, [defaultChatFilter])
+
+  // Build a view route for the workspace default filter, optionally including a session
+  const defaultViewRoute = useCallback((sessionId?: string): Route => {
+    return buildDefaultViewRoute(defaultChatFilter, sessionId)
+  }, [defaultChatFilter])
+
+  // Compute the default route string (no session) for history initialization
+  const defaultRoute = useMemo(() => {
+    return defaultViewRoute() as string
+  }, [defaultViewRoute])
+
   // Initialize history stack on first load
   useEffect(() => {
     if (!isReady || !workspaceId) return
@@ -707,12 +742,12 @@ export function NavigationProvider({
     // Only initialize once
     if (historyStackRef.current.length === 0) {
       const params = new URLSearchParams(window.location.search)
-      const initialRoute = (params.get('route') || 'allChats') as Route
+      const initialRoute = (params.get('route') || defaultRoute) as Route
       historyStackRef.current = [initialRoute]
       historyIndexRef.current = 0
       console.log('[Navigation] Initialized history stack with:', initialRoute)
     }
-  }, [isReady, workspaceId])
+  }, [isReady, workspaceId, defaultRoute])
 
   // Process pending navigation when ready
   useEffect(() => {
@@ -875,6 +910,8 @@ export function NavigationProvider({
         updateRightSidebar,
         toggleRightSidebar,
         navigateToSource,
+        defaultViewRoute,
+        defaultFilter,
       }}
     >
       {children}

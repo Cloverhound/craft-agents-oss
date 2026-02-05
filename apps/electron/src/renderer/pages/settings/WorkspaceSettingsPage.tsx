@@ -22,8 +22,11 @@ import { routes } from '@/lib/navigate'
 import { Spinner } from '@craft-agent/ui'
 import { RenameDialog } from '@/components/ui/rename-dialog'
 import type { PermissionMode, ThinkingLevel, WorkspaceSettings } from '../../../shared/types'
+import { serializeChatFilter } from '../../../shared/types'
 import { PERMISSION_MODE_CONFIG } from '@craft-agent/shared/agent/mode-types'
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVELS } from '@craft-agent/shared/agent/thinking-levels'
+import { useStatuses } from '@/hooks/useStatuses'
+import { useLabels } from '@/hooks/useLabels'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 
 import {
@@ -64,6 +67,13 @@ export default function WorkspaceSettingsPage() {
   const [localMcpEnabled, setLocalMcpEnabled] = useState(true)
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(true)
 
+  // Default chat filter state
+  const [defaultChatFilter, setDefaultChatFilter] = useState('allChats')
+
+  // Load statuses and labels for the default filter dropdown
+  const { statuses } = useStatuses(activeWorkspaceId)
+  const { flatLabels } = useLabels(activeWorkspaceId)
+
   // Mode cycling state
   const [enabledModes, setEnabledModes] = useState<PermissionMode[]>(['safe', 'ask', 'allow-all'])
   const [modeCyclingError, setModeCyclingError] = useState<string | null>(null)
@@ -87,6 +97,7 @@ export default function WorkspaceSettingsPage() {
           setPermissionMode(settings.permissionMode || 'ask')
           setWorkingDirectory(settings.workingDirectory || '')
           setLocalMcpEnabled(settings.localMcpEnabled ?? true)
+          setDefaultChatFilter(settings.defaultChatFilter || 'allChats')
           // Load cyclable permission modes from workspace settings
           if (settings.cyclablePermissionModes && settings.cyclablePermissionModes.length >= 2) {
             setEnabledModes(settings.cyclablePermissionModes)
@@ -252,6 +263,15 @@ export default function WorkspaceSettingsPage() {
     async (enabled: boolean) => {
       setLocalMcpEnabled(enabled)
       await updateWorkspaceSetting('localMcpEnabled', enabled)
+    },
+    [updateWorkspaceSetting]
+  )
+
+  const handleDefaultChatFilterChange = useCallback(
+    async (filterStr: string) => {
+      setDefaultChatFilter(filterStr)
+      // Store undefined for 'allChats' to keep config clean (allChats is the implicit default)
+      await updateWorkspaceSetting('defaultChatFilter', filterStr === 'allChats' ? undefined : filterStr)
     },
     [updateWorkspaceSetting]
   )
@@ -480,6 +500,34 @@ export default function WorkspaceSettingsPage() {
                   </motion.p>
                 )}
               </AnimatePresence>
+            </SettingsSection>
+
+            {/* Navigation */}
+            <SettingsSection title="Navigation">
+              <SettingsCard>
+                <SettingsMenuSelectRow
+                  label="Default view"
+                  description="Landing view when the app starts"
+                  value={defaultChatFilter}
+                  onValueChange={handleDefaultChatFilterChange}
+                  options={[
+                    { value: 'allChats', label: 'All Chats', description: 'Show all sessions' },
+                    { value: 'flagged', label: 'Flagged', description: 'Show flagged sessions only' },
+                    ...statuses.map((s) => ({
+                      value: serializeChatFilter({ kind: 'state', stateId: s.id }),
+                      label: s.label,
+                      description: `Sessions with ${s.label} status`,
+                    })),
+                    ...flatLabels.map((l) => ({
+                      value: serializeChatFilter({ kind: 'label', labelId: l.id }),
+                      label: l.name,
+                      description: `Sessions with ${l.name} label`,
+                    })),
+                  ]}
+                  searchable={statuses.length + flatLabels.length > 6}
+                  searchPlaceholder="Search filters..."
+                />
+              </SettingsCard>
             </SettingsSection>
 
             {/* Advanced */}

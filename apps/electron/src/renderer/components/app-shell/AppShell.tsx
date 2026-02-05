@@ -529,7 +529,7 @@ function AppShellContent({
   const rightSidebarHandleRef = React.useRef<HTMLDivElement>(null)
   const [session, setSession] = useSession()
   const { resolvedMode, isDark, setMode } = useTheme()
-  const { canGoBack, canGoForward, goBack, goForward, navigateToSource } = useNavigation()
+  const { canGoBack, canGoForward, goBack, goForward, navigateToSource, defaultViewRoute } = useNavigation()
 
   // Double-Esc interrupt feature: first Esc shows warning, second Esc interrupts
   const { handleEscapePress } = useEscapeInterrupt()
@@ -1643,14 +1643,14 @@ function AppShellContent({
   const handleNewChat = useCallback(async (_useCurrentAgent: boolean = true) => {
     if (!activeWorkspace) return
 
-    // Exit search mode and switch to All Chats
+    // Exit search mode and switch to default filter view
     setSearchActive(false)
     setSearchQuery('')
 
     const newSession = await onCreateSession(activeWorkspace.id)
-    // Navigate to the new session via central routing
-    navigate(routes.view.allChats(newSession.id))
-  }, [activeWorkspace, onCreateSession])
+    // Navigate to the new session via central routing (respects workspace default filter)
+    navigate(defaultViewRoute(newSession.id))
+  }, [activeWorkspace, onCreateSession, defaultViewRoute])
 
   // Delete Source - simplified since agents system is removed
   const handleDeleteSource = useCallback(async (sourceSlug: string) => {
