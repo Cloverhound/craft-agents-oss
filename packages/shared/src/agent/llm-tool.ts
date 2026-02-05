@@ -33,7 +33,7 @@ import { getAnthropicApiKey, getAnthropicBaseUrl, getClaudeOAuthToken } from '..
 const ALLOWED_MODELS = [
   'claude-sonnet-4-5-20250929',
   'claude-3-5-haiku-latest',
-  'claude-opus-4-5-20251101',
+  'claude-opus-4-6',
 ] as const;
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
@@ -486,7 +486,7 @@ For large files (>2000 lines), use {path, startLine, endLine} to select a portio
       if (args.thinking && args.model === 'claude-3-5-haiku-latest') {
         return errorResponse(
           'Extended thinking not supported on Haiku.\n\n' +
-          'Use claude-sonnet-4-5-20250929 or claude-opus-4-5-20251101 for thinking mode.'
+          'Use claude-sonnet-4-5-20250929 or claude-opus-4-6 for thinking mode.'
         );
       }
 

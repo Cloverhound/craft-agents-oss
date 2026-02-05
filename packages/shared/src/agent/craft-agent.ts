@@ -1586,6 +1586,37 @@ export class CraftAgent {
       // Clear stderr buffer at start of each query
       this.lastStderrOutput = [];
 
+      // Resolve model and thinking configuration
+      const isMiniAgent = this.config.systemPromptPreset === 'mini';
+      const modelConfig = this.config.model || DEFAULT_MODEL;
+      const model = resolveModelId(modelConfig);
+      const effectiveThinkingLevel: ThinkingLevel = this.thinkingLevel;
+      const thinkingTokens = getThinkingTokens(effectiveThinkingLevel, modelConfig);
+
+      // Disallowed tools (SDK features we don't support)
+      const disallowedTools: string[] = ['EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion'];
+
+      // Build MCP servers configuration
+      const sourceMcpResult = this.getSourceMcpServersFiltered();
+      const mcpServers: Options['mcpServers'] = isMiniAgent
+        ? {
+            session: getSessionScopedTools(sessionId, this.workspaceRootPath),
+            'craft-agents-docs': {
+              type: 'http',
+              url: 'https://agents.craft.do/docs/mcp',
+            },
+          }
+        : {
+            preferences: getPreferencesServer(false),
+            session: getSessionScopedTools(sessionId, this.workspaceRootPath),
+            'craft-agents-docs': {
+              type: 'http',
+              url: 'https://agents.craft.do/docs/mcp',
+            },
+            ...sourceMcpResult.servers,
+            ...this.sourceApiServers,
+          };
+
       // Detect if resolved model is Claude — non-Claude models (via OpenRouter/Ollama) don't
       // support Anthropic-specific betas or extended thinking parameters
       const isClaude = isClaudeModel(model);
