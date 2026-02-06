@@ -10,6 +10,7 @@ let optionsEnv: Record<string, string> = {};
 let customPathToClaudeCodeExecutable: string | null = null;
 let customInterceptorPath: string | null = null;
 let customExecutable: string | null = null;
+let authCurlDir: string | null = null;
 let claudeConfigChecked = false;
 
 // UTF-8 BOM character — Windows editors/processes sometimes prepend this to files.
@@ -180,6 +181,18 @@ export function setExecutable(path: string) {
     customExecutable = path;
 }
 
+/**
+ * Set the directory containing the auth-curl binary.
+ * This directory is prepended to PATH in the SDK subprocess environment,
+ * making `auth-curl` available as a bare command for credentials.
+ *
+ * In Electron: bundled at vendor/auth-curl/
+ * In dev: resolved from the monorepo packages/auth-curl/bin/
+ */
+export function setAuthCurlDir(dir: string) {
+    authCurlDir = dir;
+}
+
 export function getDefaultOptions(): Partial<Options> {
     // Repair corrupted ~/.claude.json before the SDK subprocess reads it
     ensureClaudeConfig();
@@ -192,6 +205,13 @@ export function getDefaultOptions(): Partial<Options> {
     // Use platform-appropriate null device (NUL on Windows, /dev/null on Unix)
     const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
     const envFileFlag = `--env-file=${nullDevice}`;
+
+    // Prepend auth-curl directory to PATH so `auth-curl` is available as a bare
+    // command in the SDK subprocess. This is how credentials are used from Bash.
+    const pathSep = process.platform === 'win32' ? ';' : ':';
+    const PATH = authCurlDir
+        ? `${authCurlDir}${pathSep}${process.env.PATH || ''}`
+        : process.env.PATH;
 
     // If custom path is set (e.g., for Electron), use it with minimal options
     if (customPathToClaudeCodeExecutable) {
@@ -207,6 +227,7 @@ export function getDefaultOptions(): Partial<Options> {
             executableArgs,
             env: {
                 ...process.env,
+                PATH,
                 ... optionsEnv,
                 // Propagate debug mode from argv flag OR existing env var
                 CRAFT_DEBUG: (process.argv.includes('--debug') || process.env.CRAFT_DEBUG === '1') ? '1' : '0',
@@ -226,6 +247,7 @@ export function getDefaultOptions(): Partial<Options> {
             executableArgs: [envFileFlag, '--preload', join(baseDir, 'network-interceptor.ts')],
             env: {
                 ...process.env,
+                PATH,
                 BUN_BE_BUN: '1',
                 ... optionsEnv,
                 // Propagate debug mode from argv flag OR existing env var
@@ -237,6 +259,7 @@ export function getDefaultOptions(): Partial<Options> {
         executableArgs: [envFileFlag],
         env: {
             ... process.env,
+            PATH,
             ... optionsEnv,
             // Propagate debug mode from argv flag OR existing env var
             CRAFT_DEBUG: (process.argv.includes('--debug') || process.env.CRAFT_DEBUG === '1') ? '1' : '0',

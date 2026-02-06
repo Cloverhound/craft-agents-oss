@@ -40,7 +40,7 @@ import {
 import { loadWorkspaceSources, loadAllSources, getSourcesBySlugs, type LoadedSource, type McpServerConfig, getSourcesNeedingAuth, getSourceCredentialManager, getSourceServerBuilder, type SourceWithCredential, isApiOAuthProvider, SERVER_BUILD_ERRORS, TokenRefreshManager, createTokenGetter } from '@craft-agent/shared/sources'
 import { ConfigWatcher, type ConfigWatcherCallbacks } from '@craft-agent/shared/config'
 import { getAuthState } from '@craft-agent/shared/auth'
-import { setAnthropicOptionsEnv, setPathToClaudeCodeExecutable, setInterceptorPath, setExecutable } from '@craft-agent/shared/agent'
+import { setAnthropicOptionsEnv, setPathToClaudeCodeExecutable, setInterceptorPath, setExecutable, setAuthCurlDir } from '@craft-agent/shared/agent'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient } from '@craft-agent/shared/mcp'
 import { type Session, type Message, type SessionEvent, type FileAttachment, type StoredAttachment, type SendMessageOptions, IPC_CHANNELS, generateMessageId } from '../shared/types'
@@ -913,6 +913,30 @@ export class SessionManager {
       setExecutable(bunPath)
     }
     // In development: use system 'bun' (works on Windows now, supports --preload for interceptor)
+
+    // Set path to auth-curl binary directory so `auth-curl` is available as a bare
+    // command in the SDK subprocess (used by credentials for authenticated API calls).
+    // In packaged app: bundled at vendor/auth-curl/
+    // In development: resolved from the monorepo packages/auth-curl/bin/
+    if (app.isPackaged) {
+      const authCurlBinDir = join(basePath, 'vendor', 'auth-curl')
+      if (existsSync(authCurlBinDir)) {
+        sessionLog.info('Setting authCurlDir:', authCurlBinDir)
+        setAuthCurlDir(authCurlBinDir)
+      }
+    } else {
+      // Dev: resolve from monorepo packages/auth-curl/bin/
+      // Try basePath directly first (when cwd is monorepo root, e.g. `electron:start`)
+      // then fall back to ../../ (when cwd is apps/electron, e.g. `electron:dev`)
+      let authCurlBinDir = join(basePath, 'packages', 'auth-curl', 'bin')
+      if (!existsSync(authCurlBinDir)) {
+        authCurlBinDir = join(basePath, '..', '..', 'packages', 'auth-curl', 'bin')
+      }
+      if (existsSync(authCurlBinDir)) {
+        sessionLog.info('Setting authCurlDir:', authCurlBinDir)
+        setAuthCurlDir(authCurlBinDir)
+      }
+    }
 
     // Set up authentication environment variables (critical for SDK to work)
     await this.reinitializeAuth()
