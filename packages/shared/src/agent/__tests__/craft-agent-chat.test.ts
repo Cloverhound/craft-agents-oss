@@ -76,6 +76,7 @@ function createTestSession(sdkSessionId?: string) {
     id: 'test-session',
     sdkSessionId,
     workspaceId: 'test-workspace',
+    workspaceRootPath: '/tmp/test-workspace',
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
   };
@@ -259,7 +260,7 @@ describe('CraftAgent.chat() - Session Continuity', () => {
     const calls = mockQuery.getAllCalls();
     expect(calls.length).toBe(1);
 
-    const options = calls[0].options as any;
+    const options = calls[0]!.options as any;
     expect(options.resume).toBe(TEST_SESSION_ID);
 
     agent.dispose();
@@ -282,7 +283,7 @@ describe('CraftAgent.chat() - Session Continuity', () => {
     const calls = mockQuery.getAllCalls();
     expect(calls.length).toBe(1);
 
-    const options = calls[0].options as any;
+    const options = calls[0]!.options as any;
     expect(options.resume).toBeUndefined();
 
     agent.dispose();
@@ -551,10 +552,12 @@ describe('CraftAgent.chat() - Binary Attachments', () => {
 
     // Text attachment (should be inlined in prompt)
     const textAttachment = {
+      type: 'text' as const,
       name: 'test.txt',
       path: '/tmp/test.txt',
       mimeType: 'text/plain',
-      content: 'Hello from file',
+      text: 'Hello from file',
+      size: 15,
     };
 
     // Act
@@ -623,7 +626,7 @@ describe('CraftAgent.chat() - Context Injection', () => {
     // Working directory should be set in SDK options
     const calls = mockQuery.getAllCalls();
     expect(calls.length).toBe(1);
-    const options = calls[0].options as any;
+    const options = calls[0]!.options as any;
     expect(options.cwd).toBeDefined();
 
     agent.dispose();
@@ -666,8 +669,8 @@ describe('CraftAgent.chat() - Multiple Messages', () => {
     expect(String((channelMessages[1] as any).message?.content)).toContain('Second message');
 
     // Both turns should have produced text_delta events
-    const firstTextEvents = firstEvents.filter(e => e.type === 'text_delta');
-    const secondTextEvents = secondEvents.filter(e => e.type === 'text_delta');
+    const firstTextEvents = firstEvents.filter((e: any) => e.type === 'text_delta');
+    const secondTextEvents = secondEvents.filter((e: any) => e.type === 'text_delta');
     expect(firstTextEvents.length).toBeGreaterThan(0);
     expect(secondTextEvents.length).toBeGreaterThan(0);
 

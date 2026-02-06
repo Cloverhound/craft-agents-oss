@@ -14,6 +14,14 @@ import type { LoadedSkill, LoadedSource } from '../../shared/types'
 import { getSourceIconSync, getSkillIconSync } from './icon-cache'
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+// Workspace ID character class for regex: word chars, spaces (NOT newlines), hyphens, dots
+// Using literal space instead of \s to avoid matching newlines which would break parsing
+const WS_ID_CHARS = '[\\w .-]'
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -77,7 +85,7 @@ export function parseMentions(
 
   // Match skill mentions: [skill:slug] or [skill:workspaceId:slug]
   // The pattern captures the last component (slug) after any number of colons
-  const skillPattern = /\[skill:(?:[\w-]+:)?([\w-]+)\]/g
+  const skillPattern = new RegExp(`\\[skill:(?:${WS_ID_CHARS}+:)?([\\w-]+)\\]`, 'g')
   while ((match = skillPattern.exec(text)) !== null) {
     const slug = match[1]
     if (availableSkillSlugs.includes(slug) && !result.skills.includes(slug)) {
@@ -138,7 +146,7 @@ export function findMentionMatches(
 
   // Match skill mentions: [skill:slug] or [skill:workspaceId:slug]
   // The pattern captures the full match and extracts the slug (last component)
-  const skillPattern = /(\[skill:(?:[\w-]+:)?([\w-]+)\])/g
+  const skillPattern = new RegExp(`(\\[skill:(?:${WS_ID_CHARS}+:)?([\\w-]+)\\])`, 'g')
   while ((match = skillPattern.exec(text)) !== null) {
     const slug = match[2]
     if (availableSkillSlugs.includes(slug)) {
@@ -201,7 +209,7 @@ export function removeMention(text: string, type: MentionItemType, id: string): 
     case 'skill':
     default:
       // Match both [skill:slug] and [skill:workspaceId:slug]
-      pattern = new RegExp(`\\[skill:(?:[\\w-]+:)?${escapeRegExp(id)}\\]`, 'g')
+      pattern = new RegExp(`\\[skill:(?:${WS_ID_CHARS}+:)?${escapeRegExp(id)}\\]`, 'g')
       break
   }
 
@@ -222,7 +230,7 @@ export function stripAllMentions(text: string): string {
     // Remove [source:slug]
     .replace(/\[source:[\w-]+\]/g, '')
     // Remove [skill:slug] or [skill:workspaceId:slug]
-    .replace(/\[skill:(?:[\w-]+:)?[\w-]+\]/g, '')
+    .replace(new RegExp(`\\[skill:(?:${WS_ID_CHARS}+:)?[\\w-]+\\]`, 'g'), '')
     // Remove [file:path]
     .replace(/\[file:[^\]]+\]/g, '')
     // Remove [folder:path]

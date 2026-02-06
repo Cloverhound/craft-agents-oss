@@ -31,6 +31,7 @@ import { getAnthropicApiKey, getAnthropicBaseUrl, getClaudeOAuthToken } from '..
 // ============================================================================
 
 const ALLOWED_MODELS = [
+  'claude-opus-4-6',
   'claude-sonnet-4-5-20250929',
   'claude-3-5-haiku-latest',
   'claude-opus-4-6',

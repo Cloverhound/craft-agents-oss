@@ -607,42 +607,63 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
           // Validate image for Claude API
           const validation = validateImageForClaudeAPI(decoded.length, imageSize.width, imageSize.height)
 
-          if (!validation.valid) {
-            // Hard error - reject the image
+          // For dimension errors, calculate resize instead of rejecting
+          // File size errors (>5MB) still reject since we can't fix those without significant quality loss
+          let shouldResize = validation.needsResize
+          let targetSize = validation.suggestedSize
+
+          if (!validation.valid && validation.errorCode === 'dimension_exceeded') {
+            // Image exceeds 8000px limit - calculate resize to fit within limits
+            const maxDim = IMAGE_LIMITS.MAX_DIMENSION
+            const scale = Math.min(maxDim / imageSize.width, maxDim / imageSize.height)
+            targetSize = {
+              width: Math.floor(imageSize.width * scale),
+              height: Math.floor(imageSize.height * scale),
+            }
+            shouldResize = true
+            ipcLog.info(`Image exceeds ${maxDim}px limit (${imageSize.width}×${imageSize.height}), will resize to ${targetSize.width}×${targetSize.height}`)
+          } else if (!validation.valid) {
+            // Other validation errors (e.g., file size > 5MB) - reject
             throw new Error(validation.error)
           }
 
-          // If resize is recommended, do it now
-          if (validation.needsResize && validation.suggestedSize) {
-            ipcLog.info(`Resizing image from ${imageSize.width}×${imageSize.height} to ${validation.suggestedSize.width}×${validation.suggestedSize.height}`)
+          // If resize is needed (either recommended or required), do it now
+          if (shouldResize && targetSize) {
+            ipcLog.info(`Resizing image from ${imageSize.width}×${imageSize.height} to ${targetSize.width}×${targetSize.height}`)
 
-            const resized = image.resize({
-              width: validation.suggestedSize.width,
-              height: validation.suggestedSize.height,
-              quality: 'best',
-            })
+            try {
+              const resized = image.resize({
+                width: targetSize.width,
+                height: targetSize.height,
+                quality: 'best',
+              })
 
-            // Get as PNG for best quality (or JPEG for photos to save space)
-            const isPhoto = attachment.mimeType === 'image/jpeg'
-            decoded = isPhoto ? resized.toJPEG(90) : resized.toPNG()
-            wasResized = true
-            finalSize = decoded.length
-
-            // Re-validate final size after resize (should be much smaller)
-            if (decoded.length > IMAGE_LIMITS.MAX_SIZE) {
-              // Even after resize it's too big - try more aggressive compression
-              decoded = resized.toJPEG(75)
+              // Get as PNG for best quality (or JPEG for photos to save space)
+              const isPhoto = attachment.mimeType === 'image/jpeg'
+              decoded = isPhoto ? resized.toJPEG(IMAGE_LIMITS.JPEG_QUALITY_HIGH) : resized.toPNG()
+              wasResized = true
               finalSize = decoded.length
+
+              // Re-validate final size after resize (should be much smaller)
               if (decoded.length > IMAGE_LIMITS.MAX_SIZE) {
-                throw new Error(`Image still too large after resize (${(decoded.length / 1024 / 1024).toFixed(1)}MB). Please use a smaller image.`)
+                // Even after resize it's too big - try more aggressive compression
+                decoded = resized.toJPEG(IMAGE_LIMITS.JPEG_QUALITY_FALLBACK)
+                finalSize = decoded.length
+                if (decoded.length > IMAGE_LIMITS.MAX_SIZE) {
+                  throw new Error(`Image still too large after resize (${(decoded.length / 1024 / 1024).toFixed(1)}MB). Please use a smaller image.`)
+                }
               }
+
+              ipcLog.info(`Image resized: ${attachment.size} → ${finalSize} bytes (${Math.round((1 - finalSize / attachment.size) * 100)}% reduction)`)
+
+              // Store resized base64 to return to renderer
+              // This is used when sending to Claude API instead of original large base64
+              resizedBase64 = decoded.toString('base64')
+            } catch (resizeError) {
+              ipcLog.error('Image resize failed:', resizeError)
+              const reason = resizeError instanceof Error ? resizeError.message : String(resizeError)
+              throw new Error(`Image too large (${imageSize.width}×${imageSize.height}) and automatic resize failed: ${reason}. Please manually resize it before attaching.`)
             }
-
-            ipcLog.info(`Image resized: ${attachment.size} → ${finalSize} bytes (${Math.round((1 - finalSize / attachment.size) * 100)}% reduction)`)
-
-            // Store resized base64 to return to renderer
-            // This is used when sending to Claude API instead of original large base64
-            resizedBase64 = decoded.toString('base64')
           }
         }
 

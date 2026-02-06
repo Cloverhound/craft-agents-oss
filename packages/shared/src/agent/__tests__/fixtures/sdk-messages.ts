@@ -3,6 +3,10 @@
  *
  * These fixtures represent the messages that the SDK's query() function yields.
  * They are intentionally minimal - only the fields that CraftAgent actually uses.
+ *
+ * Cast through `unknown` to avoid chasing every new required field the SDK adds
+ * to its types (e.g. container, context_management, service_tier). The runtime
+ * code only reads specific fields, so partial mocks work fine.
  */
 
 import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -32,7 +36,10 @@ export function createSystemInitMessage(sessionId: string = TEST_SESSION_ID): SD
     permissionMode: 'default',
     slash_commands: ['compact', 'help'],
     output_style: 'normal',
-  } as SDKMessage;
+    claude_code_version: '0.0.0-test',
+    skills: [],
+    plugins: [],
+  } as unknown as SDKMessage;
 }
 
 // ============================================================================
@@ -57,9 +64,11 @@ export function createAssistantTextMessage(
       stop_reason: 'end_turn',
       stop_sequence: null,
       usage: { input_tokens: 100, output_tokens: 50 },
+      container: null,
+      context_management: null,
     },
     parent_tool_use_id: null,
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 export function createAssistantToolUseMessage(
@@ -83,9 +92,11 @@ export function createAssistantToolUseMessage(
       stop_reason: 'tool_use',
       stop_sequence: null,
       usage: { input_tokens: 100, output_tokens: 50 },
+      container: null,
+      context_management: null,
     },
     parent_tool_use_id: null,
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 // ============================================================================
@@ -114,7 +125,7 @@ export function createUserToolResultMessage(
       ],
     },
     parent_tool_use_id: null,
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 // ============================================================================
@@ -136,6 +147,7 @@ export function createSuccessResultMessage(
     num_turns: 1,
     result,
     total_cost_usd: 0.01,
+    stop_reason: null,
     usage: {
       input_tokens: 100,
       output_tokens: 50,
@@ -154,7 +166,7 @@ export function createSuccessResultMessage(
       },
     },
     permission_denials: [],
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 export function createErrorResultMessage(
@@ -171,6 +183,7 @@ export function createErrorResultMessage(
     is_error: true,
     num_turns: 1,
     total_cost_usd: 0.005,
+    stop_reason: null,
     usage: {
       input_tokens: 50,
       output_tokens: 10,
@@ -180,7 +193,7 @@ export function createErrorResultMessage(
     modelUsage: {},
     permission_denials: [],
     errors,
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 // ============================================================================
@@ -206,9 +219,11 @@ export function createStreamEventMessageStart(
         stop_reason: null,
         stop_sequence: null,
         usage: { input_tokens: 100, output_tokens: 0 },
+        container: null,
+        context_management: null,
       },
     },
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 export function createStreamEventTextDelta(
@@ -217,7 +232,7 @@ export function createStreamEventTextDelta(
 ): SDKMessage {
   return {
     type: 'stream_event',
-    uuid: 'uuid-stream-delta',
+    uuid: 'aaaaaaaa-bbbb-cccc-dddd-stream-delta',
     session_id: sessionId,
     parent_tool_use_id: null,
     event: {
@@ -228,7 +243,7 @@ export function createStreamEventTextDelta(
         text,
       },
     },
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 export function createStreamEventMessageDelta(
@@ -245,10 +260,12 @@ export function createStreamEventMessageDelta(
       delta: {
         stop_reason: stopReason,
         stop_sequence: null,
+        container: null,
       },
       usage: { output_tokens: 50 },
+      context_management: null,
     },
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 // ============================================================================
