@@ -274,7 +274,7 @@ describe('Auth type verification', () => {
     ['query', 'query'],
     ['basic', 'basic'],
     ['none', 'none'],
-  ])('source authType "%s" produces ApiConfig.auth.type "%s"', (sourceAuthType, expectedAuthType) => {
+  ] as const)('source authType "%s" produces ApiConfig.auth.type "%s"', (sourceAuthType, expectedAuthType) => {
     const source = createMockSource({
       api: {
         baseUrl: 'https://api.example.com/',

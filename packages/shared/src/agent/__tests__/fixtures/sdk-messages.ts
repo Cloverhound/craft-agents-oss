@@ -32,7 +32,7 @@ export function createSystemInitMessage(sessionId: string = TEST_SESSION_ID): SD
     permissionMode: 'default',
     slash_commands: ['compact', 'help'],
     output_style: 'normal',
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 // ============================================================================
@@ -154,7 +154,7 @@ export function createSuccessResultMessage(
       },
     },
     permission_denials: [],
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 export function createErrorResultMessage(
@@ -180,7 +180,7 @@ export function createErrorResultMessage(
     modelUsage: {},
     permission_denials: [],
     errors,
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 // ============================================================================
@@ -208,7 +208,7 @@ export function createStreamEventMessageStart(
         usage: { input_tokens: 100, output_tokens: 0 },
       },
     },
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 export function createStreamEventTextDelta(
@@ -228,7 +228,7 @@ export function createStreamEventTextDelta(
         text,
       },
     },
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 export function createStreamEventMessageDelta(
@@ -248,7 +248,7 @@ export function createStreamEventMessageDelta(
       },
       usage: { output_tokens: 50 },
     },
-  } as SDKMessage;
+  } as unknown as SDKMessage;
 }
 
 // ============================================================================

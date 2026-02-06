@@ -21,6 +21,7 @@ export type ErrorCode =
   | 'invalid_model'          // Model ID not found
   | 'data_policy_error'      // OpenRouter data policy restriction
   | 'invalid_request'        // API rejected the request (e.g., bad image, invalid content)
+  | 'provider_error'         // AI provider error (500, overloaded, service unavailable)
   | 'unknown_error';
 
 export interface RecoveryAction {
@@ -182,6 +183,15 @@ const ERROR_DEFINITIONS: Record<ErrorCode, Omit<AgentError, 'code' | 'originalEr
       { key: 'r', label: 'Retry', action: 'retry' },
     ],
     canRetry: true,
+  },
+  provider_error: {
+    title: 'AI Provider Error',
+    message: 'The AI provider is experiencing issues. This is not a problem with your setup.',
+    actions: [
+      { key: 'r', label: 'Retry', action: 'retry' },
+    ],
+    canRetry: true,
+    retryDelayMs: 5000,
   },
   unknown_error: {
     title: 'Error',
