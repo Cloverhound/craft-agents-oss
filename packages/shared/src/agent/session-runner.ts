@@ -219,7 +219,7 @@ export class SessionRunner {
         // Guard: forceStop() nullifies responseIterator from another tick.
         // Without this check, calling .next() on null causes a TypeError that
         // the error handler misinterprets as a session resume failure.
-        if (!this.responseIterator || this._state === 'stopped') {
+        if (!this.responseIterator || (this._state as SessionRunnerState) === 'stopped') {
           throw new ForceStopError();
         }
 
