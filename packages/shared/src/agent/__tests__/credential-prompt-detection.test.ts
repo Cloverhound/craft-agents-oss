@@ -167,9 +167,10 @@ describe('Real-world scenarios', () => {
   });
 
   test('Simple API key source should use header mode', () => {
-    const simpleSource: { api: { headerNames?: string[] } } = {
+    // Source without headerNames - only the api.headerNames field matters for detection
+    const simpleSource = {
       api: {
-        // No headerNames
+        // No headerNames property
       },
     };
 

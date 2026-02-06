@@ -195,6 +195,11 @@ export function handleStatus(
           message: event.message,
           statusType: event.statusType,
         },
+        // When compaction starts, clear stale token count so the % badge hides immediately.
+        // The correct post-compaction value will arrive via usage_update from the SDK.
+        ...(event.statusType === 'compacting' && updatedSession.tokenUsage ? {
+          tokenUsage: { ...updatedSession.tokenUsage, inputTokens: 0 },
+        } : {}),
       },
       streaming,
     },

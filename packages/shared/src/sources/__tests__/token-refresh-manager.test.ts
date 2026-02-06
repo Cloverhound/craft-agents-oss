@@ -22,8 +22,8 @@ function createMockSource(overrides: Partial<LoadedSource['config']> = {}): Load
     },
     guide: null,
     folderPath: '/test/path',
-    workspaceRootPath: '/test',
-    workspaceId: 'test-workspace',
+    workspaceRootPath: '/test/workspace',
+    workspaceId: 'test-workspace-id',
   };
 }
 

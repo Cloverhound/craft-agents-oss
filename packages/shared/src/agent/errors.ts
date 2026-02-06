@@ -21,7 +21,8 @@ export type ErrorCode =
   | 'invalid_model'          // Model ID not found
   | 'data_policy_error'      // OpenRouter data policy restriction
   | 'invalid_request'        // API rejected the request (e.g., bad image, invalid content)
-  | 'provider_error'         // AI provider error (500, overloaded, service unavailable)
+  | 'image_too_large'        // Image exceeds API dimension/size limits
+  | 'provider_error'         // AI provider experiencing issues (overloaded, unavailable)
   | 'unknown_error';
 
 export interface RecoveryAction {
@@ -184,6 +185,12 @@ const ERROR_DEFINITIONS: Record<ErrorCode, Omit<AgentError, 'code' | 'originalEr
     ],
     canRetry: true,
   },
+  image_too_large: {
+    title: 'Image Too Large',
+    message: 'The image exceeds API limits (max 8000px or 5MB). Please resize or use a smaller image.',
+    actions: [],
+    canRetry: false,
+  },
   provider_error: {
     title: 'AI Provider Error',
     message: 'The AI provider is experiencing issues. This is not a problem with your setup.',
@@ -279,6 +286,12 @@ export function parseError(error: unknown): AgentError {
     code = 'network_error';
   } else if (lowerMessage.includes('mcp') && (lowerMessage.includes('auth') || lowerMessage.includes('401'))) {
     code = 'mcp_auth_required';
+  } else if (
+    lowerMessage.includes('image') &&
+    (lowerMessage.includes('dimension') || lowerMessage.includes('8000') || lowerMessage.includes('5mb')) &&
+    (lowerMessage.includes('exceed') || lowerMessage.includes('too large'))
+  ) {
+    code = 'image_too_large';
   } else if (lowerMessage.includes('exited with code') || lowerMessage.includes('process exited')) {
     // SDK subprocess crashed - likely auth/setup issue
     // Check if the error contains more specific info

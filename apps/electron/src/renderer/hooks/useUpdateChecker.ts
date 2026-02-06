@@ -22,12 +22,8 @@ interface UseUpdateCheckerResult {
   isDownloading: boolean
   /** Whether update is ready to install */
   isReadyToInstall: boolean
-  /** Download progress (0-100, or -1 for indeterminate on macOS) */
+  /** Download progress (0-100) */
   downloadProgress: number
-  /** Whether progress is indeterminate (macOS doesn't report download progress) */
-  isIndeterminate: boolean
-  /** Whether this platform supports progress events */
-  supportsProgress: boolean
   /** Check for updates manually */
   checkForUpdates: () => Promise<void>
   /** Install the downloaded update and restart */
@@ -153,18 +149,12 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
     }
   }, [showUpdateToast, installUpdate])
 
-  const downloadProgress = updateInfo?.downloadProgress ?? 0
-  const supportsProgress = updateInfo?.supportsProgress ?? true
-
   return {
     updateInfo,
     updateAvailable: updateInfo?.available ?? false,
     isDownloading: updateInfo?.downloadState === 'downloading',
     isReadyToInstall: updateInfo?.downloadState === 'ready',
-    downloadProgress,
-    // Progress is indeterminate if downloading and either platform doesn't support it OR progress is -1
-    isIndeterminate: updateInfo?.downloadState === 'downloading' && (!supportsProgress || downloadProgress < 0),
-    supportsProgress,
+    downloadProgress: updateInfo?.downloadProgress ?? 0,
     checkForUpdates,
     installUpdate,
   }

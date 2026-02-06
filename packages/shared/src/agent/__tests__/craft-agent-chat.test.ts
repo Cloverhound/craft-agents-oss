@@ -75,6 +75,7 @@ function createTestSession(sdkSessionId?: string) {
   return {
     id: 'test-session',
     sdkSessionId,
+    workspaceId: 'test-workspace',
     workspaceRootPath: '/tmp/test-workspace',
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
@@ -555,7 +556,7 @@ describe('CraftAgent.chat() - Binary Attachments', () => {
       name: 'test.txt',
       path: '/tmp/test.txt',
       mimeType: 'text/plain',
-      content: 'Hello from file',
+      text: 'Hello from file',
       size: 15,
     };
 

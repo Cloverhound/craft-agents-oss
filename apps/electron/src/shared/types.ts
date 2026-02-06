@@ -1099,10 +1099,8 @@ export interface UpdateInfo {
   latestVersion: string | null
   /** Download state */
   downloadState: 'idle' | 'downloading' | 'ready' | 'installing' | 'error'
-  /** Download progress (0-100, or -1 for indeterminate on macOS) */
+  /** Download progress (0-100) */
   downloadProgress: number
-  /** Whether this platform supports download progress events (false on macOS) */
-  supportsProgress: boolean
   /** Error message if download/install failed */
   error?: string
 }
