@@ -140,7 +140,7 @@ function CredentialItem({ credential, isSelected, isFirst, workspaceId, onClick,
           <div className="credential-content relative group select-none pl-2 mr-2">
         {/* Credential Avatar - positioned absolutely */}
         <div className="absolute left-[18px] top-3.5 z-10 flex items-center justify-center">
-          <CredentialAvatar credential={credential} size="sm" />
+          <CredentialAvatar credential={credential} size="sm" workspaceId={workspaceId} />
         </div>
         {/* Main content button */}
         <button

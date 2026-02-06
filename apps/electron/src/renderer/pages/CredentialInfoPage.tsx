@@ -159,7 +159,7 @@ export default function CredentialInfoPage({ credentialSlug, workspaceId }: Cred
         <Info_Page.Content>
           {/* Hero: Avatar, title, and description */}
           <Info_Page.Hero
-            avatar={<CredentialAvatar credential={credential} fluid />}
+            avatar={<CredentialAvatar credential={credential} fluid workspaceId={workspaceId} />}
             title={credential.name}
             tagline={credential.description || `${authTypeLabel(credential.auth.type)} authentication`}
           />

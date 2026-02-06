@@ -1896,6 +1896,11 @@ function AppShellContent({
       return 'All Skills'
     }
 
+    // Credentials navigator
+    if (isCredentialsNavigation(navState)) {
+      return 'All Credentials'
+    }
+
     // Settings navigator
     if (isSettingsNavigation(navState)) return 'Settings'
 
