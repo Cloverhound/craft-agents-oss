@@ -12,6 +12,7 @@
  * - ~/.craft-agent/workspaces/{slug}/ - Workspace directory (recursive)
  *   - sources/{slug}/config.json, guide.md, permissions.json
  *   - skills/{slug}/SKILL.md, icon.*
+ *   - credentials/{slug}.json
  *   - sessions/{id}/session.jsonl (header metadata only)
  *   - permissions.json
  */
@@ -46,6 +47,11 @@ import {
   statusNeedsIconDownload,
   downloadStatusIcon,
 } from '../statuses/storage.ts';
+import {
+  loadCredentialConfig as loadCredentialConfigFromDisk,
+  loadCredentialRegistry as loadCredentialRegistryFromDisk,
+} from '../credentials/registry.ts';
+import type { LoadedCredentialConfig } from '../credentials/credential-config-types.ts';
 import { readSessionHeader } from '../sessions/jsonl.ts';
 import type { SessionHeader } from '../sessions/types.ts';
 import { loadAppTheme, loadPresetThemes, loadPresetTheme, getAppThemesDir } from './storage.ts';
@@ -103,6 +109,12 @@ export interface ConfigWatcherCallbacks {
   onSkillChange?: (slug: string, skill: LoadedSkill | null) => void;
   /** Called when the skills list changes (add/remove folders) */
   onSkillsListChange?: (skills: LoadedSkill[]) => void;
+
+  // Credential callbacks
+  /** Called when a credential config file changes (null if deleted) */
+  onCredentialChange?: (slug: string, credential: LoadedCredentialConfig | null) => void;
+  /** Called when the credentials list changes (add/remove files) */
+  onCredentialsListChange?: (credentials: LoadedCredentialConfig[]) => void;
 
   // Permissions callbacks
   /** Called when app-level default permissions change (~/.craft-agent/permissions/default.json) */
@@ -180,12 +192,14 @@ export class ConfigWatcher {
   // Track known items for detecting adds/removes
   private knownSources: Set<string> = new Set();
   private knownSkills: Set<string> = new Set();
+  private knownCredentials: Set<string> = new Set();
   private knownThemes: Set<string> = new Set();
 
   // Computed paths
   private workspaceDir: string;
   private sourcesDir: string;
   private skillsDir: string;
+  private credentialsDir: string;
 
   constructor(workspaceIdOrPath: string, callbacks: ConfigWatcherCallbacks) {
     this.callbacks = callbacks;
@@ -202,6 +216,7 @@ export class ConfigWatcher {
     }
     this.sourcesDir = getWorkspaceSourcesPath(this.workspaceDir);
     this.skillsDir = getWorkspaceSkillsPath(this.workspaceDir);
+    this.credentialsDir = join(this.workspaceDir, 'credentials');
   }
 
   /**
@@ -253,6 +268,9 @@ export class ConfigWatcher {
     this.scanSkills();
     span.mark('scanSkills');
 
+    this.scanCredentials();
+    span.mark('scanCredentials');
+
     this.scanAppThemes();
     span.mark('scanAppThemes');
 
@@ -284,6 +302,7 @@ export class ConfigWatcher {
 
     this.knownSources.clear();
     this.knownSkills.clear();
+    this.knownCredentials.clear();
     this.knownThemes.clear();
 
     debug('[ConfigWatcher] Stopped');
@@ -391,6 +410,21 @@ export class ConfigWatcher {
         // Icon file changes also trigger a skill change (to update iconPath)
         this.debounce(`skill-icon:${slug}`, () => this.handleSkillChange(slug));
       }
+      return;
+    }
+
+    // Credentials changes: credentials/{slug}.json (flat files, not subdirectories)
+    if (parts[0] === 'credentials' && parts.length >= 2) {
+      const file = parts[1]!;
+
+      // Only handle .json files
+      if (file.endsWith('.json')) {
+        const slug = file.replace('.json', '');
+        this.debounce(`credential:${slug}`, () => this.handleCredentialChange(slug));
+      }
+
+      // Directory-level changes (detect add/remove)
+      this.debounce('credentials-dir', () => this.handleCredentialsDirChange());
       return;
     }
 
@@ -736,6 +770,135 @@ export class ConfigWatcher {
         .catch((error) => {
           debug('[ConfigWatcher] Icon download failed for skill:', slug, error);
         });
+    }
+  }
+
+  // ============================================================
+  // Credentials Handlers
+  // ============================================================
+
+  /** Load a single credential config */
+  private loadCredentialConfig(slug: string): LoadedCredentialConfig | null {
+    return loadCredentialConfigFromDisk(this.workspaceDir, slug);
+  }
+
+  /** Load all credential configs */
+  private loadCredentialRegistry(): LoadedCredentialConfig[] {
+    return loadCredentialRegistryFromDisk(this.workspaceDir);
+  }
+
+  /**
+   * Scan credentials directory to populate known credentials
+   */
+  private scanCredentials(): void {
+    if (!existsSync(this.credentialsDir)) {
+      return;
+    }
+
+    try {
+      const entries = readdirSync(this.credentialsDir);
+
+      for (const entry of entries) {
+        if (entry.endsWith('.json')) {
+          this.knownCredentials.add(entry.replace('.json', ''));
+        }
+      }
+
+      debug('[ConfigWatcher] Known credentials:', Array.from(this.knownCredentials));
+    } catch (error) {
+      debug('[ConfigWatcher] Error scanning credentials:', error);
+    }
+  }
+
+  /**
+   * Handle credentials directory change (add/remove files)
+   */
+  private handleCredentialsDirChange(): void {
+    debug('[ConfigWatcher] Credentials directory changed');
+
+    if (!existsSync(this.credentialsDir)) {
+      // Directory was deleted
+      const removed = Array.from(this.knownCredentials);
+      this.knownCredentials.clear();
+
+      for (const slug of removed) {
+        this.callbacks.onCredentialChange?.(slug, null);
+      }
+
+      this.callbacks.onCredentialsListChange?.([]);
+      return;
+    }
+
+    try {
+      const entries = readdirSync(this.credentialsDir);
+      const currentSlugs = new Set<string>();
+
+      for (const entry of entries) {
+        if (entry.endsWith('.json')) {
+          currentSlugs.add(entry.replace('.json', ''));
+        }
+      }
+
+      let changed = false;
+
+      // Find added credentials
+      for (const slug of currentSlugs) {
+        if (!this.knownCredentials.has(slug)) {
+          debug('[ConfigWatcher] New credential:', slug);
+          this.knownCredentials.add(slug);
+          changed = true;
+        }
+      }
+
+      // Find removed credentials
+      for (const slug of this.knownCredentials) {
+        if (!currentSlugs.has(slug)) {
+          debug('[ConfigWatcher] Removed credential:', slug);
+          this.knownCredentials.delete(slug);
+          this.callbacks.onCredentialChange?.(slug, null);
+          changed = true;
+        }
+      }
+
+      // Notify list change if set changed
+      if (changed) {
+        const allCredentials = this.loadCredentialRegistry();
+        this.callbacks.onCredentialsListChange?.(allCredentials);
+      }
+    } catch (error) {
+      debug('[ConfigWatcher] Error handling credentials dir change:', error);
+      this.callbacks.onError?.('credentials/', error as Error);
+    }
+  }
+
+  /**
+   * Handle individual credential config file change
+   */
+  private handleCredentialChange(slug: string): void {
+    debug('[ConfigWatcher] Credential changed:', slug);
+
+    const configPath = join(this.credentialsDir, `${slug}.json`);
+
+    if (!existsSync(configPath)) {
+      // File was deleted
+      if (this.knownCredentials.has(slug)) {
+        this.knownCredentials.delete(slug);
+        this.callbacks.onCredentialChange?.(slug, null);
+        // Also notify list change
+        const allCredentials = this.loadCredentialRegistry();
+        this.callbacks.onCredentialsListChange?.(allCredentials);
+      }
+      return;
+    }
+
+    // Load the credential
+    try {
+      const credential = this.loadCredentialConfig(slug);
+      this.knownCredentials.add(slug);
+      this.callbacks.onCredentialChange?.(slug, credential);
+    } catch (error) {
+      debug('[ConfigWatcher] Error loading credential:', slug, error);
+      this.callbacks.onError?.(`credentials/${slug}.json`, error as Error);
     }
   }
 

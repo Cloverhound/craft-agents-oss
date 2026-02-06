@@ -78,6 +78,8 @@ export type EditContextKey =
   | 'add-source-mcp'   // Filter-specific: user is viewing MCPs
   | 'add-source-local' // Filter-specific: user is viewing Local Folders
   | 'add-skill'
+  | 'add-credential'
+  | 'credential-config'
   | 'edit-statuses'
   | 'edit-labels'
   | 'edit-auto-rules'
@@ -354,6 +356,36 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
     },
     example: 'Review PRs following our code standards',
     overridePlaceholder: 'What should I learn to do?',
+  }),
+
+  'add-credential': (location) => ({
+    context: {
+      label: 'Add Credential',
+      filePath: `${location}/credentials/`, // location is the workspace root path
+      context:
+        'The user wants to add a new credential to their workspace. ' +
+        'Credentials are JSON config files at ~/.craft-agent/workspaces/{ws}/credentials/{slug}.json. ' +
+        'Each credential has: name, slug, urlPatterns (glob syntax), auth config, and optional icon/description/permissions/testRequest. ' +
+        'Auth types: bearer, header, multi-header, query, basic, oauth2. ' +
+        'Ask clarifying questions if needed: What API? What auth type? What URL patterns? ' +
+        'Create the credential config JSON file. Follow the patterns in ~/.craft-agent/docs/credentials.md.',
+    },
+    example: 'Add GitHub API credentials',
+    overridePlaceholder: 'What API do you need credentials for?',
+  }),
+
+  'credential-config': (location) => ({
+    context: {
+      label: 'Credential Config',
+      filePath: location, // location is the full path to {slug}.json
+      context:
+        'The user wants to edit a credential config file (JSON). ' +
+        'Credential configs contain: name, slug, urlPatterns, auth, icon, description, permissions, testRequest. ' +
+        'Do NOT modify secrets — they are stored separately in the encrypted credential store. ' +
+        'Only edit the JSON config metadata. Follow patterns in ~/.craft-agent/docs/credentials.md.',
+    },
+    example: 'Add a URL pattern for the staging server',
+    inlineExecution: true,
   }),
 
   // Status configuration context

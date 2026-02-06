@@ -10,6 +10,7 @@ export type DocFeature =
   | 'sources-api'
   | 'sources-mcp'
   | 'sources-local'
+  | 'credentials'
   | 'skills'
   | 'statuses'
   | 'permissions'
@@ -52,6 +53,12 @@ export const DOCS: Record<DocFeature, DocInfo> = {
     title: 'Local Folders',
     summary:
       'Give your agent access to local directories like Obsidian vaults, code repositories, or data folders on your machine.',
+  },
+  credentials: {
+    path: '/credentials/overview',
+    title: 'Credentials',
+    summary:
+      'Provide automatic authentication for API requests via auth-curl. Define URL patterns and auth types to inject credentials into HTTP requests without manual configuration.',
   },
   skills: {
     path: '/skills/overview',

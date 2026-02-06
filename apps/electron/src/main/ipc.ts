@@ -2115,6 +2115,47 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   })
 
   // ============================================================
+  // Credentials (Workspace-scoped)
+  // ============================================================
+
+  // Get all credential configs for a workspace
+  ipcMain.handle(IPC_CHANNELS.CREDENTIALS_GET, async (_event, workspaceId: string) => {
+    ipcLog.info(`CREDENTIALS_GET: Loading credentials for workspace: ${workspaceId}`)
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) {
+      ipcLog.error(`CREDENTIALS_GET: Workspace not found: ${workspaceId}`)
+      return []
+    }
+    const { loadCredentialRegistry } = await import('@craft-agent/shared/credentials/registry')
+    const credentials = loadCredentialRegistry(workspace.rootPath)
+    ipcLog.info(`CREDENTIALS_GET: Loaded ${credentials.length} credentials from ${workspace.rootPath}`)
+    return credentials
+  })
+
+  // Delete a credential config from a workspace
+  ipcMain.handle(IPC_CHANNELS.CREDENTIALS_DELETE, async (_event, workspaceId: string, credentialSlug: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { deleteCredentialConfig } = await import('@craft-agent/shared/credentials/registry')
+    const deleted = deleteCredentialConfig(workspace.rootPath, credentialSlug)
+    if (!deleted) throw new Error(`Credential not found: ${credentialSlug}`)
+    ipcLog.info(`Deleted credential: ${credentialSlug}`)
+  })
+
+  // Open credential config file in Finder/Explorer
+  ipcMain.handle(IPC_CHANNELS.CREDENTIALS_OPEN_FINDER, async (_event, workspaceId: string, credentialSlug: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { shell } = await import('electron')
+    const { getCredentialConfigPath } = await import('@craft-agent/shared/credentials/registry')
+
+    const configPath = getCredentialConfigPath(workspace.rootPath, credentialSlug)
+    await shell.showItemInFolder(configPath)
+  })
+
+  // ============================================================
   // Status Management (Workspace-scoped)
   // ============================================================
 

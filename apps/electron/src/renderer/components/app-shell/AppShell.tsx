@@ -19,6 +19,7 @@ import {
   Trash2,
   DatabaseZap,
   Zap,
+  KeyRound,
   Inbox,
   Globe,
   FolderOpen,
@@ -78,10 +79,11 @@ import { useFocusZone, useGlobalShortcuts } from "@/hooks/keyboard"
 import { useFocusContext } from "@/context/FocusContext"
 import { getSessionTitle } from "@/utils/session"
 import { useSetAtom } from "jotai"
-import type { Session, Workspace, FileAttachment, PermissionRequest, LoadedSource, LoadedSkill, PermissionMode, SourceFilter } from "../../../shared/types"
+import type { Session, Workspace, FileAttachment, PermissionRequest, LoadedSource, LoadedSkill, LoadedCredentialConfig, PermissionMode, SourceFilter } from "../../../shared/types"
 import { sessionMetaMapAtom, type SessionMeta } from "@/atoms/sessions"
 import { sourcesAtom } from "@/atoms/sources"
 import { skillsAtom } from "@/atoms/skills"
+import { credentialsAtom } from "@/atoms/credentials"
 import { type TodoStateId, type TodoState, statusConfigsToTodoStates } from "@/config/todo-states"
 import { useStatuses } from "@/hooks/useStatuses"
 import { useLabels } from "@/hooks/useLabels"
@@ -101,12 +103,14 @@ import {
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
+  isCredentialsNavigation,
   type NavigationState,
   type ChatFilter,
 } from "@/contexts/NavigationContext"
 import type { SettingsSubpage } from "../../../shared/types"
 import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
+import { CredentialsListPanel } from "./CredentialsListPanel"
 import { PanelHeader } from "./PanelHeader"
 import { EditPopover, getEditConfig, type EditContextKey } from "@/components/ui/EditPopover"
 import { getDocUrl } from "@craft-agent/shared/docs/doc-links"
@@ -741,6 +745,14 @@ function AppShellContent({
   React.useEffect(() => {
     setSkillsAtom(skills)
   }, [skills, setSkillsAtom])
+  // Credentials state (workspace-scoped)
+  const [credentials, setCredentials] = React.useState<LoadedCredentialConfig[]>([])
+  // Sync credentials to atom for NavigationContext auto-selection
+  const setCredentialsAtom = useSetAtom(credentialsAtom)
+  React.useEffect(() => {
+    setCredentialsAtom(credentials)
+  }, [credentials, setCredentialsAtom])
+
   // Whether local MCP servers are enabled (affects stdio source status)
   const [localMcpEnabled, setLocalMcpEnabled] = React.useState(true)
 
@@ -823,6 +835,14 @@ function AppShellContent({
   React.useEffect(() => {
     const cleanup = window.electronAPI.onSkillsChanged?.((updatedSkills) => {
       setSkills(updatedSkills || [])
+    })
+    return cleanup
+  }, [])
+
+  // Subscribe to live credential updates (when credential configs change)
+  React.useEffect(() => {
+    const cleanup = window.electronAPI.onCredentialsChanged?.((updatedCredentials) => {
+      setCredentials(updatedCredentials || [])
     })
     return cleanup
   }, [])
@@ -964,6 +984,12 @@ function AppShellContent({
   const handleSkillSelect = React.useCallback((skill: LoadedSkill) => {
     if (!activeWorkspaceId) return
     navigate(routes.view.skills(skill.slug))
+  }, [activeWorkspaceId, navigate])
+
+  // Handle selecting a credential from the list
+  const handleCredentialSelect = React.useCallback((cred: LoadedCredentialConfig) => {
+    if (!activeWorkspaceId) return
+    navigate(routes.view.credentials(cred.slug))
   }, [activeWorkspaceId, navigate])
 
   // Focus zone management
@@ -1159,6 +1185,16 @@ function AppShellContent({
       console.error('[Chat] Failed to load skills:', err)
     })
   }, [activeWorkspaceId, activeSessionWorkingDirectory])
+
+  // Load credentials when workspace changes
+  React.useEffect(() => {
+    if (!activeWorkspaceId) return
+    window.electronAPI.getCredentials(activeWorkspaceId).then((loaded) => {
+      setCredentials(loaded || [])
+    }).catch(err => {
+      console.error('[Chat] Failed to load credentials:', err)
+    })
+  }, [activeWorkspaceId])
 
   // Filter session metadata by active workspace
   // Also exclude hidden sessions (mini-agent sessions) from all counts and lists
@@ -1400,6 +1436,7 @@ function AppShellContent({
     textareaRef: chatInputRef,
     enabledSources: sources,
     skills,
+    credentials,
     labels: labelConfigs,
     onSessionLabelsChange: handleSessionLabelsChange,
     enabledModes,
@@ -1411,7 +1448,7 @@ function AppShellContent({
     isSearchModeActive: searchActive,
     chatDisplayRef,
     onChatMatchInfoChange: handleChatMatchInfoChange,
-  }), [contextValue, handleDeleteSession, sources, skills, labelConfigs, handleSessionLabelsChange, enabledModes, effectiveTodoStates, handleSessionSourcesChange, rightSidebarOpenButton, searchActive, searchQuery, handleChatMatchInfoChange])
+  }), [contextValue, handleDeleteSession, sources, skills, credentials, labelConfigs, handleSessionLabelsChange, enabledModes, effectiveTodoStates, handleSessionSourcesChange, rightSidebarOpenButton, searchActive, searchQuery, handleChatMatchInfoChange])
 
   // Persist expanded folders to localStorage (workspace-scoped)
   React.useEffect(() => {
@@ -1513,6 +1550,11 @@ function AppShellContent({
   // Handler for skills view
   const handleSkillsClick = useCallback(() => {
     navigate(routes.view.skills())
+  }, [])
+
+  // Handler for credentials view
+  const handleCredentialsClick = useCallback(() => {
+    navigate(routes.view.credentials())
   }, [])
 
   // Handler for settings view
@@ -1676,6 +1718,18 @@ function AppShellContent({
     }
   }, [activeWorkspace])
 
+  // Delete Credential
+  const handleDeleteCredential = useCallback(async (credentialSlug: string) => {
+    if (!activeWorkspace) return
+    try {
+      await window.electronAPI.deleteCredential(activeWorkspace.id, credentialSlug)
+      toast.success(`Deleted credential: ${credentialSlug}`)
+    } catch (error) {
+      console.error('[Chat] Failed to delete credential:', error)
+      toast.error('Failed to delete credential')
+    }
+  }, [activeWorkspace])
+
   // Respond to menu bar "New Chat" trigger
   const menuTriggerRef = useRef(menuNewChatTrigger)
   useEffect(() => {
@@ -1716,8 +1770,9 @@ function AppShellContent({
     }
     flattenTree(labelTree)
 
-    // 3. Sources, Skills, Settings
+    // 3. Sources, Credentials, Skills, Settings
     result.push({ id: 'nav:sources', type: 'nav', action: handleSourcesClick })
+    result.push({ id: 'nav:credentials', type: 'nav', action: handleCredentialsClick })
     result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick('app') })
 
@@ -2153,6 +2208,17 @@ function AppShellContent({
                           },
                         },
                       ],
+                    },
+                    {
+                      id: "nav:credentials",
+                      title: "Credentials",
+                      label: String(credentials.length),
+                      icon: KeyRound,
+                      variant: isCredentialsNavigation(navState) ? "default" : "ghost",
+                      onClick: handleCredentialsClick,
+                      contextMenu: {
+                        type: 'credentials' as const,
+                      },
                     },
                     {
                       id: "nav:skills",
@@ -2882,6 +2948,17 @@ function AppShellContent({
                 onSkillClick={handleSkillSelect}
                 onDeleteSkill={handleDeleteSkill}
                 selectedSkillSlug={isSkillsNavigation(navState) && navState.details?.type === 'skill' ? navState.details.skillSlug : null}
+              />
+            )}
+            {isCredentialsNavigation(navState) && activeWorkspaceId && (
+              /* Credentials List */
+              <CredentialsListPanel
+                credentials={credentials}
+                workspaceId={activeWorkspaceId}
+                workspaceRootPath={activeWorkspace?.rootPath}
+                onCredentialClick={handleCredentialSelect}
+                onDeleteCredential={handleDeleteCredential}
+                selectedCredentialSlug={isCredentialsNavigation(navState) && navState.details?.type === 'credential' ? navState.details.credentialSlug : null}
               />
             )}
             {isSettingsNavigation(navState) && (

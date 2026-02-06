@@ -150,6 +150,12 @@ export const routes = {
       return `skills/skill/${skillSlug}` as const
     },
 
+    /** Credentials view (credentials navigator). Pass a slug string for a credential detail view. */
+    credentials: (credentialSlug?: string) => {
+      if (!credentialSlug) return 'credentials' as const
+      return `credentials/credential/${credentialSlug}` as const
+    },
+
     /** Settings view (settings navigator) */
     settings: (subpage?: 'app' | 'appearance' | 'input' | 'workspace' | 'permissions' | 'labels' | 'shortcuts' | 'preferences') =>
       subpage && subpage !== 'app'

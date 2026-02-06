@@ -636,6 +636,17 @@ export class SessionManager {
         const skills = loadWorkspaceSkills(workspaceRootPath)
         this.broadcastSkillsChanged(skills)
       },
+      onCredentialsListChange: async (credentials) => {
+        sessionLog.info(`Credentials list changed in ${workspaceRootPath} (${credentials.length} credentials)`)
+        this.broadcastCredentialsChanged(credentials)
+      },
+      onCredentialChange: async (slug, credential) => {
+        sessionLog.info(`Credential '${slug}' changed:`, credential ? 'updated' : 'deleted')
+        // Broadcast updated list to UI
+        const { loadCredentialRegistry } = await import('@craft-agent/shared/credentials/registry')
+        const credentials = loadCredentialRegistry(workspaceRootPath)
+        this.broadcastCredentialsChanged(credentials)
+      },
 
       // Session metadata changes (external edits to session.jsonl headers).
       // Detects label/flag/name/todoState changes made by other instances or scripts.
@@ -736,6 +747,15 @@ export class SessionManager {
     if (!this.windowManager) return
     sessionLog.info(`Broadcasting skills changed (${skills.length} skills)`)
     this.windowManager.broadcastToAll(IPC_CHANNELS.SKILLS_CHANGED, skills)
+  }
+
+  /**
+   * Broadcast credentials changed event to all windows
+   */
+  private broadcastCredentialsChanged(credentials: import('@craft-agent/shared/credentials/credential-config-types').LoadedCredentialConfig[]): void {
+    if (!this.windowManager) return
+    sessionLog.info(`Broadcasting credentials changed (${credentials.length} credentials)`)
+    this.windowManager.broadcastToAll(IPC_CHANNELS.CREDENTIALS_CHANGED, credentials)
   }
 
   /**

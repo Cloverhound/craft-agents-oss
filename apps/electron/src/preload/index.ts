@@ -307,6 +307,25 @@ const api: ElectronAPI = {
     }
   },
 
+  // Credentials
+  getCredentials: (workspaceId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.CREDENTIALS_GET, workspaceId),
+  deleteCredential: (workspaceId: string, credentialSlug: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.CREDENTIALS_DELETE, workspaceId, credentialSlug),
+  openCredentialInFinder: (workspaceId: string, credentialSlug: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.CREDENTIALS_OPEN_FINDER, workspaceId, credentialSlug),
+
+  // Credentials change listener (live updates when credential configs change)
+  onCredentialsChanged: (callback: (credentials: import('@craft-agent/shared/credentials/credential-config-types').LoadedCredentialConfig[]) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, credentials: import('@craft-agent/shared/credentials/credential-config-types').LoadedCredentialConfig[]) => {
+      callback(credentials)
+    }
+    ipcRenderer.on(IPC_CHANNELS.CREDENTIALS_CHANGED, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.CREDENTIALS_CHANGED, handler)
+    }
+  },
+
   // Statuses change listener (live updates when statuses config or icon files change)
   onStatusesChanged: (callback: (workspaceId: string) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, workspaceId: string) => {

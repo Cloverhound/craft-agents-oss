@@ -23,9 +23,11 @@ import {
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
+  isCredentialsNavigation,
 } from '@/contexts/NavigationContext'
 import { AppSettingsPage, AppearanceSettingsPage, InputSettingsPage, WorkspaceSettingsPage, PermissionsSettingsPage, LabelsSettingsPage, PreferencesPage, ShortcutsPage, SourceInfoPage, ChatPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
+import CredentialInfoPage from '@/pages/CredentialInfoPage'
 
 export interface MainContentPanelProps {
   /** Whether the app is in focused mode (single chat, no sidebar) */
@@ -142,6 +144,28 @@ export function MainContentPanel({
       <Panel variant="grow" className={className}>
         <div className="flex items-center justify-center h-full text-muted-foreground">
           <p className="text-sm">No skills configured</p>
+        </div>
+      </Panel>
+    )
+  }
+
+  // Credentials navigator - show credential info or empty state
+  if (isCredentialsNavigation(navState)) {
+    if (navState.details?.type === 'credential') {
+      return wrapWithStoplight(
+        <Panel variant="grow" className={className}>
+          <CredentialInfoPage
+            credentialSlug={navState.details.credentialSlug}
+            workspaceId={activeWorkspaceId || ''}
+          />
+        </Panel>
+      )
+    }
+    // No credential selected - empty state
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <div className="flex items-center justify-center h-full text-muted-foreground">
+          <p className="text-sm">No credentials configured</p>
         </div>
       </Panel>
     )
