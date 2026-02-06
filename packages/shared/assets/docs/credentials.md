@@ -1,10 +1,10 @@
 # Credentials Configuration Guide
 
-This guide explains how to configure credentials for authenticating with external APIs in Craft Agent. Credentials let you use `auth-curl` — a curl wrapper that auto-injects authentication headers based on URL pattern matching.
+This guide explains how to configure credentials for authenticating with external APIs in Craft Agent. When credentials are configured, a local proxy automatically injects authentication headers into HTTP requests matching URL patterns — no special tooling needed.
 
 ## How Credentials Work
 
-Credentials are **separate from Sources**. While Sources integrate external services as tools for the agent, Credentials provide lightweight API authentication for direct HTTP requests via `auth-curl`.
+Credentials are **separate from Sources**. While Sources integrate external services as tools for the agent, Credentials provide automatic API authentication for direct HTTP requests. Just use standard `curl`, `fetch`, `wget`, or any HTTP client.
 
 **Key principles:**
 - **Config files are safe to commit** — they contain URL patterns and auth types, never secrets
@@ -180,7 +180,7 @@ Patterns use glob-style matching:
 
 ## Explore Mode Permissions
 
-By default, `auth-curl` in Explore mode only allows `GET` requests. Configure `permissions.explore.methods` to allow additional methods:
+In Explore mode, only `GET` requests are allowed by default. Configure `permissions.explore.methods` to allow additional methods:
 
 ```json
 {
@@ -195,51 +195,30 @@ By default, `auth-curl` in Explore mode only allows `GET` requests. Configure `p
 
 If no permissions block is present, defaults to `["GET"]` only.
 
-## auth-curl CLI
+## How Credential Injection Works
 
-`auth-curl` is a drop-in curl wrapper that auto-injects authentication based on URL pattern matching.
+When credentials are configured, Craft Agent runs a local HTTPS proxy that transparently intercepts matching requests:
 
-### Usage
+1. A local proxy starts when the first session begins (if credentials are configured)
+2. All HTTP clients in the agent session route through the proxy via environment variables
+3. For requests matching a credential's `urlPatterns`, the proxy injects authentication headers
+4. For non-matching requests, the proxy tunnels them through without modification (zero overhead)
+5. In Explore mode, the proxy enforces method restrictions (e.g., blocks POST for GET-only credentials)
+
+**No special CLI or tooling needed** — standard `curl`, `fetch`, `wget`, Python `requests`, or any HTTP client works automatically.
+
+### Examples
 
 ```bash
-# Automatic credential matching by URL
-auth-curl https://api.xero.com/api.xro/2.0/Invoices
+# Just use regular curl — credentials are injected automatically
+curl https://api.xero.com/api.xro/2.0/Invoices
 
-# Force a specific credential
-auth-curl --credential xero https://api.xero.com/api.xro/2.0/Invoices
+# POST with data — works in Execute mode
+curl -X POST -d '{"key":"value"}' https://api.example.com/data
 
-# Skip auth injection
-auth-curl --no-auth https://api.xero.com/api.xro/2.0/Invoices
-
-# Preview the command (auth values redacted)
-auth-curl --dry-run https://api.xero.com/api.xro/2.0/Invoices
-
-# All standard curl flags work
-auth-curl -X POST -d '{"key":"value"}' https://api.example.com/data
+# Non-matching URLs pass through without modification
+curl https://example.com/no-credentials-needed
 ```
-
-### Flags
-
-| Flag | Description |
-|------|-------------|
-| `--credential SLUG` | Force a specific credential (skip URL matching) |
-| `--no-auth` | Pass through to curl without any auth injection |
-| `--dry-run` | Print the curl command with redacted auth values |
-
-### How It Works
-
-1. Finds the active workspace (via `CRAFT_WORKSPACE_ROOT` env var or `~/.craft-agent/config.json`)
-2. Loads all credential configs from `credentials/*.json`
-3. Matches the request URL against credential `urlPatterns`
-4. Loads the secret from the encrypted credential store
-5. Builds curl auth flags (`-H`, `--user`, query params) based on auth type
-6. Executes curl with the injected auth + all original arguments
-
-If no credential matches, `auth-curl` falls through to plain `curl` (no error).
-
-### Explore Mode Enforcement
-
-When `CRAFT_PERMISSION_MODE=explore` or `CRAFT_PERMISSION_MODE=safe`, auth-curl enforces the credential's `permissions.explore.methods` list. Disallowed methods are rejected with an error.
 
 ## Session-Scoped Tools
 
@@ -361,7 +340,7 @@ credential_list({})
 | Aspect | Credentials | Sources |
 |--------|-------------|---------|
 | Purpose | Auth for direct HTTP requests | Integrated tools/APIs for the agent |
-| Interface | `auth-curl` CLI wrapper | MCP tools, API tools, filesystem tools |
+| Interface | Transparent proxy (any HTTP client) | MCP tools, API tools, filesystem tools |
 | Config location | `credentials/{slug}.json` | `sources/{slug}/config.json` |
 | Auth storage | Same encrypted store (`credentials.enc`) | Same encrypted store |
 | Explore mode | Method restrictions via `permissions` | Endpoint/tool restrictions via `permissions.json` |
@@ -369,7 +348,7 @@ credential_list({})
 
 **When to use which:**
 - **Use a Source** when you want the agent to have tools that call an API (list issues, search documents, etc.)
-- **Use a Credential** when you want to make direct HTTP requests to an API via `auth-curl` without building a full Source integration
+- **Use a Credential** when you want to make direct HTTP requests to an API without building a full Source integration
 
 ## Examples
 

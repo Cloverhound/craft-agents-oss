@@ -511,7 +511,7 @@ export class CraftAgent {
       onStateChange: (state) => {
         // Sync permission mode state with agent
         this.safeMode = state.permissionMode === 'safe';
-        // Set env var for auth-curl Explore mode enforcement
+        // Set env var for credential proxy Explore mode enforcement
         process.env.CRAFT_PERMISSION_MODE = state.permissionMode;
         // Notify UI of permission mode changes
         this.onPermissionModeChange?.(state.permissionMode);
@@ -530,7 +530,7 @@ export class CraftAgent {
       },
     });
 
-    // Set workspace root path env var for auth-curl and other tools
+    // Set workspace root path env var for credential proxy and other tools
     process.env.CRAFT_WORKSPACE_ROOT = this.workspaceRootPath;
 
     // Start config watcher for hot-reloading source changes
@@ -2887,7 +2887,7 @@ export class CraftAgent {
   /**
    * Format credential registry state for injection into user messages.
    * Shows registered credentials and their auth status so the agent
-   * knows what APIs have auto-auth via auth-curl.
+   * knows what APIs have auto-auth via the credential proxy.
    */
   private formatCredentialState(): string {
     const registry = loadCredentialRegistry(this.workspaceRootPath);
@@ -2900,7 +2900,7 @@ export class CraftAgent {
       lines.push(`- ${status} ${cred.name} (${cred.slug}): ${patterns} [${cred.auth.type}]`);
     }
 
-    return `\n<credentials>\nRegistered credentials (use \`auth-curl\` for auto-authenticated requests):\n${lines.join('\n')}\n</credentials>`;
+    return `\n<credentials>\nRegistered credentials (auto-injected into matching HTTP requests):\n${lines.join('\n')}\n</credentials>`;
   }
 
   /**

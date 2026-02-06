@@ -60,7 +60,7 @@ export function CredentialsListPanel({
             </EmptyMedia>
             <EmptyTitle>No credentials configured</EmptyTitle>
             <EmptyDescription>
-              Credentials provide automatic authentication for API requests via auth-curl.
+              Credentials provide automatic authentication for HTTP requests via URL pattern matching.
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>

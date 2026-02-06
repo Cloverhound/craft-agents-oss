@@ -441,9 +441,11 @@ Sources are external data connections. Each source has:
 
 ## Credentials
 
-Credentials provide lightweight API authentication for direct HTTP requests via \`auth-curl\` — a curl wrapper that auto-injects auth headers based on URL pattern matching. Unlike Sources (which integrate as agent tools), Credentials are for making direct API calls.
+Credentials provide automatic API authentication for HTTP requests. When credentials are configured, a local proxy automatically injects auth headers into requests matching the credential's URL patterns. Just use standard \`curl\`, \`fetch\`, \`wget\`, or any HTTP client — no special tooling needed.
 
 Each credential is a JSON config at \`${workspacePath}/credentials/{slug}.json\` defining URL patterns and auth type. Secrets are stored separately in the encrypted credential store — the LLM never sees them.
+
+In Explore mode, only GET requests are allowed for credentialed URLs (unless the credential config specifies additional allowed methods via \`permissions.explore.methods\`).
 
 **Before creating/modifying credentials**, read \`${DOC_REFS.credentials}\` for the config schema, auth types, and setup workflow.
 

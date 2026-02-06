@@ -58,7 +58,7 @@ export const DOCS: Record<DocFeature, DocInfo> = {
     path: '/credentials/overview',
     title: 'Credentials',
     summary:
-      'Provide automatic authentication for API requests via auth-curl. Define URL patterns and auth types to inject credentials into HTTP requests without manual configuration.',
+      'Provide automatic authentication for HTTP requests via URL pattern matching. Credentials are transparently injected into any HTTP client — no special tooling needed.',
   },
   skills: {
     path: '/skills/overview',

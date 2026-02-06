@@ -1,0 +1,18 @@
+{
+  "name": "@craft-agent/credential-proxy",
+  "version": "0.3.4",
+  "license": "Apache-2.0",
+  "description": "Transparent MITM HTTPS proxy that auto-injects credentials into HTTP requests matching URL patterns",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@craft-agent/shared": "workspace:*"
+  },
+  "peerDependencies": {
+    "zod": ">=3.0.0"
+  }
+}

@@ -4,7 +4,7 @@
  * in both the callback server and the playground preview.
  */
 
-import { CRAFT_LOGO_HTML } from '../branding.ts';
+import { CRAFT_LOGO_SVG, CRAFT_BRAND_COLOR } from '../branding.ts';
 
 export type AppType = 'terminal' | 'electron';
 
@@ -43,7 +43,7 @@ export function generateCallbackPage(options: {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Craft - ${title}</title>
+  <title>CloverhoundAI - ${title}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -60,14 +60,6 @@ export function generateCallbackPage(options: {
     }
 
     .logo {
-      /* Purple accent: oklch(0.62 0.13 293) */
-      color: #8b5fb3;
-      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-      font-size: 6px;
-      line-height: 1;
-      white-space: pre;
-      /* Negative letter-spacing to close gaps between block characters */
-      letter-spacing: -0.05em;
       /* 48px above the card */
       margin-bottom: 48px;
     }
@@ -122,23 +114,23 @@ export function generateCallbackPage(options: {
       font-size: 14px;
       font-weight: 500;
       color: #fff;
-      background-color: #8b5fb3;
+      background-color: ${CRAFT_BRAND_COLOR};
       border-radius: 6px;
       text-decoration: none;
       transition: background-color 0.15s ease;
     }
 
     .return-link:hover {
-      background-color: #7a4fa3;
+      background-color: #1a9a81;
     }
 
     @media (prefers-color-scheme: dark) {
       body {
         background-color: #1a1a1a;
       }
-      .logo {
-        /* Brighter purple in dark mode: oklch(0.68 0.13 293) */
-        color: #a882c9;
+      .logo svg path {
+        /* Slightly brighter teal in dark mode */
+        fill: #2dd4a8;
       }
       .card {
         ${isSuccess
@@ -166,17 +158,18 @@ export function generateCallbackPage(options: {
         color: rgba(255, 255, 255, 0.4);
       }
       .return-link {
-        background-color: #a882c9;
+        background-color: #2dd4a8;
+        color: #1a1a1a;
       }
       .return-link:hover {
-        background-color: #9a72bb;
+        background-color: #25b892;
       }
     }
   </style>
 </head>
 <body>
   <div class="content">
-    <pre class="logo">${CRAFT_LOGO_HTML}</pre>
+    <div class="logo">${CRAFT_LOGO_SVG}</div>
     <div class="card">
       <div class="status">${statusMessage}</div>
     </div>

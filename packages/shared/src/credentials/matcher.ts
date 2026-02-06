@@ -2,7 +2,7 @@
  * Credential URL Matcher
  *
  * Matches request URLs against credential URL patterns (glob-style).
- * Used by both the `authenticated_fetch` tool and `auth-curl` CLI
+ * Used by both the `authenticated_fetch` tool and the credential proxy
  * to determine which credential to inject.
  *
  * Pattern syntax:
