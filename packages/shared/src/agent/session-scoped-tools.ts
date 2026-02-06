@@ -61,6 +61,7 @@ import { buildAuthorizationHeader } from '../sources/api-tools.ts';
 import { DOC_REFS } from '../docs/index.ts';
 import { renderMermaid } from '@craft-agent/mermaid';
 import { createLLMTool } from './llm-tool.ts';
+import { isGoogleOAuthConfigured } from '../auth/google-oauth.ts';
 
 // ============================================================
 // Session-Scoped Tool Callbacks

@@ -217,11 +217,7 @@ export default function AppSettingsPage() {
                     {updateChecker.isDownloading && updateChecker.updateInfo?.latestVersion && (
                       <div className="flex items-center gap-2 text-muted-foreground text-sm">
                         <Spinner className="w-3 h-3" />
-                        {updateChecker.isIndeterminate ? (
-                          <span>Downloading v{updateChecker.updateInfo.latestVersion}...</span>
-                        ) : (
-                          <span>Downloading v{updateChecker.updateInfo.latestVersion} ({updateChecker.downloadProgress}%)</span>
-                        )}
+                        <span>Downloading v{updateChecker.updateInfo.latestVersion} ({updateChecker.downloadProgress}%)</span>
                       </div>
                     )}
                   </div>

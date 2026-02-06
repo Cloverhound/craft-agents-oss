@@ -11,10 +11,9 @@ import {
   getSetupNeeds,
   performTokenRefresh,
   _resetRefreshMutex,
-  type AuthState,
   type TokenResult,
-  type MigrationInfo,
 } from '../state.ts';
+import type { AuthState, MigrationInfo } from '../types.ts';
 
 // ============================================
 // Mock credential manager

@@ -509,8 +509,9 @@ function isUrlSafeToFetch(urlString: string): { safe: boolean; reason?: string }
   // Block private IP ranges (basic check - covers most cases)
   // This catches: 10.x.x.x, 172.16-31.x.x, 192.168.x.x, 169.254.x.x
   const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (ipMatch) {
-    const [, a, b] = ipMatch.map(Number);
+  if (ipMatch && ipMatch[1] && ipMatch[2]) {
+    const a = Number(ipMatch[1]);
+    const b = Number(ipMatch[2]);
     if (
       a === 10 ||                           // 10.0.0.0/8
       a === 127 ||                          // 127.0.0.0/8
@@ -584,7 +585,7 @@ function parseResourceMetadataFromHeader(wwwAuthenticate: string | null): string
   // Look for resource_metadata="..." or resource_metadata='...' in the header
   // Also handles optional spaces around the equals sign
   const match = wwwAuthenticate.match(/resource_metadata\s*=\s*["']([^"']+)["']/);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 /**
@@ -625,6 +626,10 @@ async function fetchProtectedResourceMetadata(
     }
 
     const authServer = data.authorization_servers[0];
+    if (!authServer) {
+      onLog?.(`  ✗ Empty authorization server in metadata`);
+      return null;
+    }
 
     // Validate the auth server URL too
     const authServerCheck = isUrlSafeToFetch(authServer);

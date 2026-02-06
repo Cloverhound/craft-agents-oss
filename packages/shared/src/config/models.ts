@@ -38,6 +38,7 @@ export const SUMMARIZATION_MODEL = 'claude-haiku-4-5-20251001';
 /** Model for instruction updates (high quality for accurate document editing) */
 export const INSTRUCTION_UPDATE_MODEL = 'claude-opus-4-6';
 
+
 // ============================================
 // HELPER FUNCTIONS
 // ============================================

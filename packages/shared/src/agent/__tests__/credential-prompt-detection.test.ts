@@ -167,12 +167,10 @@ describe('Real-world scenarios', () => {
   });
 
   test('Simple API key source should use header mode', () => {
+    // Source without headerNames - only the api.headerNames field matters for detection
     const simpleSource = {
       api: {
-        baseUrl: 'https://api.example.com/',
-        authType: 'header',
-        headerName: 'X-API-Key',
-        // No headerNames
+        // No headerNames property
       },
     };
 
