@@ -2,13 +2,20 @@
  * Proxy Integration Tests
  *
  * Tests the proxy with real HTTPS connections through the tunnel.
- * These tests hit external URLs (google.com) to verify the full
+ * These tests hit external URLs (google.com, httpbin.org) to verify the full
  * CONNECT → TLS → HTTP pipeline works end-to-end.
+ *
+ * httpbin.org tests are skipped when the service is unreachable.
  */
 
 import { describe, it, expect, afterEach } from 'bun:test';
 import { startProxy, type ProxyInstance } from '../proxy';
 import type { LoadedCredentialConfig } from '@craft-agent/shared/credentials/credential-config-types';
+
+// Check httpbin.org availability — skip MITM tests when unreachable
+const httpbinAvailable = await fetch('https://httpbin.org/get', {
+  signal: AbortSignal.timeout(5000),
+}).then(r => r.ok).catch(() => false);
 
 function makeCred(overrides: Partial<LoadedCredentialConfig> & { slug: string; urlPatterns: string[] }): LoadedCredentialConfig {
   const { slug, urlPatterns, name, auth, ...rest } = overrides;
@@ -132,7 +139,7 @@ describe('Proxy Integration — real HTTPS tunnel', () => {
     const urls = [
       'https://www.google.com/',
       'https://www.google.com/robots.txt',
-      'https://httpbin.org/get',
+      'https://www.google.com/favicon.ico',
     ];
 
     const results = await Promise.all(
@@ -160,7 +167,7 @@ describe('Proxy Integration — real HTTPS tunnel', () => {
   }, 20000);
 });
 
-describe('Proxy Integration — MITM credential injection', () => {
+describe.skipIf(!httpbinAvailable)('Proxy Integration — MITM credential injection', () => {
   let proxy: ProxyInstance | null = null;
 
   afterEach(() => {

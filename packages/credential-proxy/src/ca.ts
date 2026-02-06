@@ -52,6 +52,11 @@ function encodeDERInteger(value: Buffer | number): Buffer {
     }
   } else {
     buf = value;
+    // Strip unnecessary leading zero bytes (DER requires minimal encoding)
+    while (buf.length > 1 && buf[0] === 0) {
+      buf = buf.subarray(1);
+    }
+    // Ensure positive (leading bit 0)
     if (buf.length > 0 && buf[0]! & 0x80) {
       buf = Buffer.concat([Buffer.from([0]), buf]);
     }
