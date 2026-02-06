@@ -639,7 +639,7 @@ async function fetchProtectedResourceMetadata(
     }
 
     onLog?.(`  ✓ Found authorization server`);
-    return authServer;
+    return authServer ?? null;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       onLog?.(`  ✗ Request timeout fetching protected resource metadata`);

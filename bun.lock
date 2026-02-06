@@ -162,6 +162,16 @@
         "@modelcontextprotocol/sdk": ">=1.0.0",
       },
     },
+    "packages/credential-proxy": {
+      "name": "@craft-agent/credential-proxy",
+      "version": "0.3.4",
+      "dependencies": {
+        "@craft-agent/shared": "workspace:*",
+      },
+      "peerDependencies": {
+        "zod": ">=3.0.0",
+      },
+    },
     "packages/mermaid": {
       "name": "@craft-agent/mermaid",
       "version": "0.3.5",
@@ -404,6 +414,8 @@
     "@babel/types": ["@babel/types@7.29.0", "", { "dependencies": { "@babel/helper-string-parser": "^7.27.1", "@babel/helper-validator-identifier": "^7.28.5" } }, "sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A=="],
 
     "@craft-agent/core": ["@craft-agent/core@workspace:packages/core"],
+
+    "@craft-agent/credential-proxy": ["@craft-agent/credential-proxy@workspace:packages/credential-proxy"],
 
     "@craft-agent/electron": ["@craft-agent/electron@workspace:apps/electron"],
 

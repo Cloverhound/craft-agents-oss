@@ -12,6 +12,11 @@
  * - source_oauth_trigger: Start OAuth authentication for MCP sources
  * - source_google_oauth_trigger: Start Google OAuth authentication (Gmail, Calendar, Drive)
  * - source_credential_prompt: Prompt user for API credentials
+ * - credential_prompt: Prompt user for credential API keys/tokens
+ * - credential_oauth_client: Prompt for OAuth client_id + client_secret
+ * - credential_oauth: Initiate OAuth 2.0 + PKCE browser flow for credentials
+ * - credential_test: Verify credential works via test request
+ * - credential_list: List all credentials with status
  *
  * Source and Skill CRUD is done via standard file editing tools (Read/Write/Edit).
  * See ~/.craft-agent/docs/ for config format documentation.
@@ -57,11 +62,18 @@ import {
 import type { FolderSourceConfig, LoadedSource } from '../sources/types.ts';
 import { getSourceCredentialManager } from '../sources/index.ts';
 import { inferGoogleServiceFromUrl, inferSlackServiceFromUrl, inferMicrosoftServiceFromUrl, isApiOAuthProvider, type GoogleService, type SlackService, type MicrosoftService } from '../sources/types.ts';
+import { isGoogleOAuthConfigured } from '../auth/google-oauth.ts';
 import { buildAuthorizationHeader } from '../sources/api-tools.ts';
 import { DOC_REFS } from '../docs/index.ts';
 import { renderMermaid } from '@craft-agent/mermaid';
 import { createLLMTool } from './llm-tool.ts';
-import { isGoogleOAuthConfigured } from '../auth/google-oauth.ts';
+import {
+  createCredentialPromptTool as createCredPromptTool,
+  createCredentialOAuthClientTool,
+  createCredentialOAuthTool,
+  createCredentialTestTool,
+  createCredentialListTool,
+} from '../credentials/credential-tools.ts';
 
 // ============================================================
 // Session-Scoped Tool Callbacks
@@ -2165,6 +2177,12 @@ export function getSessionScopedTools(sessionId: string, workspaceRootPath: stri
         createSlackOAuthTriggerTool(sessionId, workspaceRootPath),
         createMicrosoftOAuthTriggerTool(sessionId, workspaceRootPath),
         createCredentialPromptTool(sessionId, workspaceRootPath),
+        // Credential tools: setup, OAuth, test, list
+        createCredPromptTool(sessionId, workspaceRootPath, getSessionScopedToolCallbacks),
+        createCredentialOAuthClientTool(sessionId, workspaceRootPath, getSessionScopedToolCallbacks),
+        createCredentialOAuthTool(sessionId, workspaceRootPath, getSessionScopedToolCallbacks),
+        createCredentialTestTool(sessionId, workspaceRootPath),
+        createCredentialListTool(sessionId, workspaceRootPath),
         // LLM tool - invoke secondary Claude calls for subtasks
         createLLMTool({ sessionId }),
       ],

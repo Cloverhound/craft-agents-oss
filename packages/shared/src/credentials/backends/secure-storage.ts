@@ -32,7 +32,7 @@ import {
   createHash,
 } from 'crypto';
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, statSync } from 'fs';
 import { hostname, userInfo, homedir } from 'os';
 import { join, dirname } from 'path';
 
@@ -113,6 +113,7 @@ export class SecureStorageBackend implements CredentialBackend {
   readonly priority = 100;
 
   private cachedStore: CredentialStore | null = null;
+  private cachedMtimeMs: number = 0;
   private encryptionKey: Buffer | null = null;
   private salt: Buffer | null = null;
 
@@ -188,14 +189,32 @@ export class SecureStorageBackend implements CredentialBackend {
   // ============================================================
 
   private async loadStore(): Promise<CredentialStore | null> {
-    // Return cached store if available
-    if (this.cachedStore) return this.cachedStore;
+    // Return cached store if file hasn't changed on disk.
+    // Another process (e.g., auth-curl CLI or credential proxy) may have
+    // written new credentials, so we check mtime to detect external changes.
+    if (this.cachedStore) {
+      try {
+        const stat = statSync(CREDENTIALS_FILE);
+        if (stat.mtimeMs === this.cachedMtimeMs) {
+          return this.cachedStore;
+        }
+        // File changed on disk — invalidate cache and re-read
+        this.cachedStore = null;
+      } catch {
+        // File may have been deleted
+        this.cachedStore = null;
+        this.cachedMtimeMs = 0;
+        return null;
+      }
+    }
 
     if (!existsSync(CREDENTIALS_FILE)) return null;
 
     let fileData: Buffer;
+    let fileMtimeMs: number;
     try {
       fileData = readFileSync(CREDENTIALS_FILE);
+      fileMtimeMs = statSync(CREDENTIALS_FILE).mtimeMs;
     } catch {
       return null;
     }
@@ -227,6 +246,7 @@ export class SecureStorageBackend implements CredentialBackend {
 
     if (store) {
       this.cachedStore = store;
+      this.cachedMtimeMs = fileMtimeMs;
       return store;
     }
 
@@ -302,6 +322,7 @@ export class SecureStorageBackend implements CredentialBackend {
     // Write with restrictive permissions (owner read/write only)
     writeFileSync(CREDENTIALS_FILE, fileData, { mode: 0o600 });
     this.cachedStore = store;
+    this.cachedMtimeMs = statSync(CREDENTIALS_FILE).mtimeMs;
   }
 
   private getEncryptionKey(salt: Buffer): Buffer {
@@ -345,6 +366,7 @@ export class SecureStorageBackend implements CredentialBackend {
       // Ignore deletion errors
     }
     this.cachedStore = null;
+    this.cachedMtimeMs = 0;
     this.encryptionKey = null;
     this.salt = null;
   }
@@ -352,6 +374,7 @@ export class SecureStorageBackend implements CredentialBackend {
   /** Clear cached data (for testing or forced refresh) */
   clearCache(): void {
     this.cachedStore = null;
+    this.cachedMtimeMs = 0;
     this.encryptionKey = null;
     this.salt = null;
   }

@@ -54,6 +54,7 @@ import { detectConfigFileType, detectAppConfigFileType, validateConfigFileConten
 import { type ThinkingLevel, getThinkingTokens, DEFAULT_THINKING_LEVEL } from './thinking-levels.ts';
 import type { LoadedSource } from '../sources/types.ts';
 import { sourceNeedsAuthentication } from '../sources/credential-manager.ts';
+import { loadCredentialRegistry } from '../credentials/registry.ts';
 
 // Re-export permission mode functions for application usage
 export {
@@ -510,6 +511,8 @@ export class CraftAgent {
       onStateChange: (state) => {
         // Sync permission mode state with agent
         this.safeMode = state.permissionMode === 'safe';
+        // Set env var for credential proxy Explore mode enforcement
+        process.env.CRAFT_PERMISSION_MODE = state.permissionMode;
         // Notify UI of permission mode changes
         this.onPermissionModeChange?.(state.permissionMode);
       },
@@ -526,6 +529,9 @@ export class CraftAgent {
         this.onAuthRequest?.(request);
       },
     });
+
+    // Set workspace root path env var for credential proxy and other tools
+    process.env.CRAFT_WORKSPACE_ROOT = this.workspaceRootPath;
 
     // Start config watcher for hot-reloading source changes
     // Only start in non-headless mode to avoid overhead in batch/script scenarios
@@ -2879,6 +2885,25 @@ export class CraftAgent {
   }
 
   /**
+   * Format credential registry state for injection into user messages.
+   * Shows registered credentials and their auth status so the agent
+   * knows what APIs have auto-auth via the credential proxy.
+   */
+  private formatCredentialState(): string {
+    const registry = loadCredentialRegistry(this.workspaceRootPath);
+    if (registry.length === 0) return '';
+
+    const lines: string[] = [];
+    for (const cred of registry) {
+      const status = cred.isAuthenticated ? '✓' : '○';
+      const patterns = cred.urlPatterns.join(', ');
+      lines.push(`- ${status} ${cred.name} (${cred.slug}): ${patterns} [${cred.auth.type}]`);
+    }
+
+    return `\n<credentials>\nRegistered credentials (auto-injected into matching HTTP requests):\n${lines.join('\n')}\n</credentials>`;
+  }
+
+  /**
    * Get the correct authentication tool name for a source, or null if no auth is needed.
    * Tool names are based on source type and provider, not the source slug.
    */
@@ -2994,6 +3019,12 @@ Please continue the conversation naturally from where we left off.
     // Add source state (always included to inform agent about available sources)
     parts.push(this.formatSourceState());
 
+    // Add credential registry state (if any credentials are registered)
+    const credentialState = this.formatCredentialState();
+    if (credentialState) {
+      parts.push(credentialState);
+    }
+
     // Add workspace capabilities (local MCP enabled/disabled, etc.)
     parts.push(this.formatWorkspaceCapabilities());
 
@@ -3050,6 +3081,12 @@ Please continue the conversation naturally from where we left off.
 
     // Add source state (always included to inform agent about available sources)
     contentBlocks.push({ type: 'text', text: this.formatSourceState() });
+
+    // Add credential registry state (if any credentials are registered)
+    const credStateSdk = this.formatCredentialState();
+    if (credStateSdk) {
+      contentBlocks.push({ type: 'text', text: credStateSdk });
+    }
 
     // Add workspace capabilities (local MCP enabled/disabled, etc.)
     contentBlocks.push({ type: 'text', text: this.formatWorkspaceCapabilities() });

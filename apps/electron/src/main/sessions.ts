@@ -40,7 +40,9 @@ import {
 import { loadWorkspaceSources, loadAllSources, getSourcesBySlugs, type LoadedSource, type McpServerConfig, getSourcesNeedingAuth, getSourceCredentialManager, getSourceServerBuilder, type SourceWithCredential, isApiOAuthProvider, SERVER_BUILD_ERRORS, TokenRefreshManager, createTokenGetter } from '@craft-agent/shared/sources'
 import { ConfigWatcher, type ConfigWatcherCallbacks } from '@craft-agent/shared/config'
 import { getAuthState } from '@craft-agent/shared/auth'
-import { setAnthropicOptionsEnv, setPathToClaudeCodeExecutable, setInterceptorPath, setExecutable } from '@craft-agent/shared/agent'
+import { setAnthropicOptionsEnv, setPathToClaudeCodeExecutable, setInterceptorPath, setExecutable, setProxyConfig, clearProxyConfig } from '@craft-agent/shared/agent'
+import { startProxy, type ProxyInstance } from '@craft-agent/credential-proxy'
+import { loadCredentialRegistry } from '@craft-agent/shared/credentials/registry'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient } from '@craft-agent/shared/mcp'
 import { type Session, type Message, type SessionEvent, type FileAttachment, type StoredAttachment, type SendMessageOptions, IPC_CHANNELS, generateMessageId } from '../shared/types'
@@ -547,6 +549,8 @@ export class SessionManager {
   private configWatchers: Map<string, ConfigWatcher> = new Map()
   // Pending credential request resolvers (keyed by requestId)
   private pendingCredentialResolvers: Map<string, (response: import('../shared/types').CredentialResponse) => void> = new Map()
+  // Credential proxy instances per workspace (lazy-started when credentials exist)
+  private credentialProxies: Map<string, ProxyInstance> = new Map()
   // Promise deduplication for lazy-loading messages (prevents race conditions)
   private messageLoadingPromises: Map<string, Promise<void>> = new Map()
   /**
@@ -635,6 +639,20 @@ export class SessionManager {
         const { loadWorkspaceSkills } = await import('@craft-agent/shared/skills')
         const skills = loadWorkspaceSkills(workspaceRootPath)
         this.broadcastSkillsChanged(skills)
+      },
+      onCredentialsListChange: async (credentials) => {
+        sessionLog.info(`Credentials list changed in ${workspaceRootPath} (${credentials.length} credentials)`)
+        this.broadcastCredentialsChanged(credentials)
+        // Update credential proxy with new credential list
+        await this.handleCredentialProxyReload(workspaceId, credentials)
+      },
+      onCredentialChange: async (slug, credential) => {
+        sessionLog.info(`Credential '${slug}' changed:`, credential ? 'updated' : 'deleted')
+        // Broadcast updated list to UI
+        const allCredentials = loadCredentialRegistry(workspaceRootPath)
+        this.broadcastCredentialsChanged(allCredentials)
+        // Update credential proxy
+        await this.handleCredentialProxyReload(workspaceId, allCredentials)
       },
 
       // Session metadata changes (external edits to session.jsonl headers).
@@ -736,6 +754,15 @@ export class SessionManager {
     if (!this.windowManager) return
     sessionLog.info(`Broadcasting skills changed (${skills.length} skills)`)
     this.windowManager.broadcastToAll(IPC_CHANNELS.SKILLS_CHANGED, skills)
+  }
+
+  /**
+   * Broadcast credentials changed event to all windows
+   */
+  private broadcastCredentialsChanged(credentials: import('@craft-agent/shared/credentials/credential-config-types').LoadedCredentialConfig[]): void {
+    if (!this.windowManager) return
+    sessionLog.info(`Broadcasting credentials changed (${credentials.length} credentials)`)
+    this.windowManager.broadcastToAll(IPC_CHANNELS.CREDENTIALS_CHANGED, credentials)
   }
 
   /**
@@ -893,6 +920,9 @@ export class SessionManager {
       setExecutable(bunPath)
     }
     // In development: use system 'bun' (works on Windows now, supports --preload for interceptor)
+
+    // Note: Credential proxy is started lazily per-workspace when the first
+    // session with credentials is created (see ensureCredentialProxy)
 
     // Set up authentication environment variables (critical for SDK to work)
     await this.reinitializeAuth()
@@ -1549,6 +1579,11 @@ export class SessionManager {
   private async getOrCreateAgent(managed: ManagedSession): Promise<CraftAgent> {
     if (!managed.agent) {
       const end = perf.start('agent.create', { sessionId: managed.id })
+
+      // Ensure credential proxy is running and session is registered before agent creation
+      // (so proxy env vars are set before the SDK subprocess starts)
+      await this.registerSessionWithProxy(managed)
+
       const config = loadStoredConfig()
       managed.agent = new CraftAgent({
         workspace: managed.workspace,
@@ -2450,6 +2485,9 @@ export class SessionManager {
       managed.agent.dispose()
     }
 
+    // Unregister from credential proxy
+    this.unregisterSessionFromProxy(sessionId, managed.workspace.id)
+
     this.sessions.delete(sessionId)
 
     // Delete from disk too
@@ -3168,6 +3206,12 @@ To view this task's output:
       // Update the mode state for this specific session via mode manager
       setPermissionMode(sessionId, mode)
 
+      // Update credential proxy session mode (takes effect immediately for next request)
+      const proxy = this.credentialProxies.get(managed.workspace.id)
+      if (proxy) {
+        proxy.updateSessionMode(sessionId, mode)
+      }
+
       this.sendEvent({
         type: 'permission_mode_changed',
         sessionId: managed.id,
@@ -3885,6 +3929,127 @@ To view this task's output:
       unregisterSessionScopedToolCallbacks(sessionId)
     }
 
+    // Stop all credential proxies
+    for (const [wsId, proxy] of this.credentialProxies) {
+      sessionLog.info(`Stopping credential proxy for workspace ${wsId}`)
+      proxy.stop()
+    }
+    this.credentialProxies.clear()
+
     sessionLog.info('Cleanup complete')
+  }
+
+  // ============================================================
+  // Credential Proxy Lifecycle
+  // ============================================================
+
+  /**
+   * Ensure a credential proxy is running for a workspace.
+   * If credentials exist and no proxy is running, starts one.
+   * If no credentials exist, does nothing.
+   *
+   * @returns The proxy instance, or null if no credentials
+   */
+  private async ensureCredentialProxy(workspace: Workspace): Promise<ProxyInstance | null> {
+    const existing = this.credentialProxies.get(workspace.id)
+    if (existing) return existing
+
+    // Check if workspace has credentials
+    const credentials = loadCredentialRegistry(workspace.rootPath)
+    if (credentials.length === 0) return null
+
+    try {
+      const proxy = await startProxy({
+        credentials,
+        log: (msg) => sessionLog.info(msg),
+      })
+
+      this.credentialProxies.set(workspace.id, proxy)
+      sessionLog.info(`Credential proxy started for workspace ${workspace.id} on port ${proxy.port}`)
+      return proxy
+    } catch (err) {
+      sessionLog.error(`Failed to start credential proxy for workspace ${workspace.id}:`, err)
+      return null
+    }
+  }
+
+  /**
+   * Register a session with the credential proxy and set up proxy env vars.
+   * Called when a session is about to send its first message (lazy agent creation).
+   */
+  async registerSessionWithProxy(managed: ManagedSession): Promise<void> {
+    const proxy = await this.ensureCredentialProxy(managed.workspace)
+    if (!proxy) return
+
+    // Register session with the proxy
+    proxy.registerSession(managed.id, managed.permissionMode ?? 'safe')
+
+    // Set proxy config so SDK subprocess gets proxy env vars
+    setProxyConfig({
+      sessionId: managed.id,
+      port: proxy.port,
+      caCertPath: proxy.caCertPath,
+      caBundlePath: proxy.caBundlePath,
+    })
+  }
+
+  /**
+   * Unregister a session from the credential proxy.
+   * If no more sessions remain for this workspace, stops the proxy.
+   */
+  private unregisterSessionFromProxy(sessionId: string, workspaceId: string): void {
+    const proxy = this.credentialProxies.get(workspaceId)
+    if (!proxy) return
+
+    proxy.unregisterSession(sessionId)
+
+    // If no more sessions, stop the proxy
+    if (proxy.sessionCount === 0) {
+      sessionLog.info(`No more sessions for workspace ${workspaceId}, stopping credential proxy`)
+      proxy.stop()
+      this.credentialProxies.delete(workspaceId)
+      clearProxyConfig()
+    }
+  }
+
+  /**
+   * Handle credential list changes from ConfigWatcher.
+   * Updates proxy's credential registry or starts/stops proxy as needed.
+   */
+  async handleCredentialProxyReload(workspaceId: string, credentials: import('@craft-agent/shared/credentials/credential-config-types').LoadedCredentialConfig[]): Promise<void> {
+    const proxy = this.credentialProxies.get(workspaceId)
+
+    if (credentials.length === 0) {
+      // All credentials removed — stop proxy if running
+      if (proxy) {
+        sessionLog.info(`All credentials removed from workspace ${workspaceId}, stopping proxy`)
+        proxy.stop()
+        this.credentialProxies.delete(workspaceId)
+        clearProxyConfig()
+      }
+      return
+    }
+
+    if (proxy) {
+      // Proxy running — reload credentials
+      proxy.reloadCredentials(credentials)
+    } else {
+      // Credentials added — start proxy if there are active sessions
+      const hasActiveSessions = Array.from(this.sessions.values()).some(s => s.workspace.id === workspaceId)
+      if (hasActiveSessions) {
+        const workspace = getWorkspaceByNameOrId(workspaceId)
+        if (workspace) {
+          const newProxy = await this.ensureCredentialProxy(workspace)
+          if (newProxy) {
+            // Register all existing sessions for this workspace
+            for (const [sessId, managed] of this.sessions) {
+              if (managed.workspace.id === workspaceId) {
+                newProxy.registerSession(sessId, managed.permissionMode ?? 'safe')
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }

@@ -10,6 +10,7 @@ let optionsEnv: Record<string, string> = {};
 let customPathToClaudeCodeExecutable: string | null = null;
 let customInterceptorPath: string | null = null;
 let customExecutable: string | null = null;
+let proxyConfig: { sessionId: string; port: number; caCertPath: string; caBundlePath: string | null } | null = null;
 let claudeConfigChecked = false;
 
 // UTF-8 BOM character — Windows editors/processes sometimes prepend this to files.
@@ -180,6 +181,22 @@ export function setExecutable(path: string) {
     customExecutable = path;
 }
 
+/**
+ * Set the credential proxy configuration for the SDK subprocess.
+ * Injects proxy env vars so all HTTP clients in the subprocess route
+ * through the credential proxy for automatic auth injection.
+ */
+export function setProxyConfig(config: { sessionId: string; port: number; caCertPath: string; caBundlePath: string | null }) {
+    proxyConfig = config;
+}
+
+/**
+ * Clear the credential proxy configuration (e.g., when proxy is stopped).
+ */
+export function clearProxyConfig() {
+    proxyConfig = null;
+}
+
 export function getDefaultOptions(): Partial<Options> {
     // Repair corrupted ~/.claude.json before the SDK subprocess reads it
     ensureClaudeConfig();
@@ -192,6 +209,29 @@ export function getDefaultOptions(): Partial<Options> {
     // Use platform-appropriate null device (NUL on Windows, /dev/null on Unix)
     const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
     const envFileFlag = `--env-file=${nullDevice}`;
+
+    // Credential proxy env vars — injects proxy settings so all HTTP clients
+    // in the SDK subprocess route through the credential proxy for auto-auth.
+    const proxyEnv: Record<string, string> = {};
+    if (proxyConfig) {
+        // Bun's fetch proxy option rejects URLs with username-only (no password).
+        // Include a dummy password so the URL parses as valid user:pass@host.
+        const proxyUrl = `http://session-${proxyConfig.sessionId}:x@127.0.0.1:${proxyConfig.port}`;
+        proxyEnv.HTTP_PROXY = proxyUrl;
+        proxyEnv.HTTPS_PROXY = proxyUrl;
+        // Bypass proxy for localhost and Anthropic API domains — the proxy is only
+        // for credential injection on user-configured APIs, not for LLM traffic.
+        proxyEnv.NO_PROXY = 'localhost,127.0.0.1,::1,.anthropic.com,.claude.ai';
+        // NODE_EXTRA_CA_CERTS appends to Node's built-in CAs (ideal for Node/Bun)
+        proxyEnv.NODE_EXTRA_CA_CERTS = proxyConfig.caCertPath;
+        // These replace the default trust store, so we use the combined bundle
+        // (system CAs + proxy CA) to maintain trust for non-intercepted domains
+        if (proxyConfig.caBundlePath) {
+            proxyEnv.SSL_CERT_FILE = proxyConfig.caBundlePath;
+            proxyEnv.CURL_CA_BUNDLE = proxyConfig.caBundlePath;
+            proxyEnv.REQUESTS_CA_BUNDLE = proxyConfig.caBundlePath;
+        }
+    }
 
     // If custom path is set (e.g., for Electron), use it with minimal options
     if (customPathToClaudeCodeExecutable) {
@@ -207,6 +247,7 @@ export function getDefaultOptions(): Partial<Options> {
             executableArgs,
             env: {
                 ...process.env,
+                ...proxyEnv,
                 ... optionsEnv,
                 // Propagate debug mode from argv flag OR existing env var
                 CRAFT_DEBUG: (process.argv.includes('--debug') || process.env.CRAFT_DEBUG === '1') ? '1' : '0',
@@ -226,6 +267,7 @@ export function getDefaultOptions(): Partial<Options> {
             executableArgs: [envFileFlag, '--preload', join(baseDir, 'network-interceptor.ts')],
             env: {
                 ...process.env,
+                ...proxyEnv,
                 BUN_BE_BUN: '1',
                 ... optionsEnv,
                 // Propagate debug mode from argv flag OR existing env var
@@ -237,6 +279,7 @@ export function getDefaultOptions(): Partial<Options> {
         executableArgs: [envFileFlag],
         env: {
             ... process.env,
+            ...proxyEnv,
             ... optionsEnv,
             // Propagate debug mode from argv flag OR existing env var
             CRAFT_DEBUG: (process.argv.includes('--debug') || process.env.CRAFT_DEBUG === '1') ? '1' : '0',

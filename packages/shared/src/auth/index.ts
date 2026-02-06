@@ -1,4 +1,9 @@
-export * from './types.ts';
+// Re-export types.ts but exclude names also exported from state.ts
+// (state.ts has the more complete versions with migration fields)
+export {
+  type OAuthSessionContext,
+  buildOAuthDeeplinkUrl,
+} from './types.ts';
 export * from './callback-page.ts';
 export * from './callback-server.ts';
 export * from './claude-oauth.ts';

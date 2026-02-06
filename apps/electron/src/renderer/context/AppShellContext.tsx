@@ -22,6 +22,7 @@ import type {
   TodoState,
   LoadedSource,
   LoadedSkill,
+  LoadedCredentialConfig,
   NewChatActionParams,
 } from '../../shared/types'
 import type { TodoState as TodoStateConfig } from '@/config/todo-states'
@@ -49,6 +50,8 @@ export interface AppShellContextType {
   enabledSources?: LoadedSource[]
   /** All skills for this workspace - provided by AppShell component (for @mentions) */
   skills?: LoadedSkill[]
+  /** All credential configs for this workspace - provided by AppShell component */
+  credentials?: LoadedCredentialConfig[]
   /** All label configs (tree) for label menu and badge display */
   labels?: import('@craft-agent/shared/labels').LabelConfig[]
   /** Callback when session labels change */

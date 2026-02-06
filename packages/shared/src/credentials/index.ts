@@ -26,3 +26,32 @@ export { CredentialManager, getCredentialManager } from './manager.ts';
 export type { CredentialId, CredentialType, StoredCredential } from './types.ts';
 export { credentialIdToAccount, accountToCredentialId } from './types.ts';
 export type { CredentialBackend } from './backends/types.ts';
+
+// Credential registry (workspace-level credential configs)
+export {
+  loadCredentialConfig,
+  loadCredentialRegistry,
+  saveCredentialConfig,
+  deleteCredentialConfig,
+  listCredentialSlugs,
+  getCredentialsDir,
+  getCredentialConfigPath,
+} from './registry.ts';
+export type {
+  CredentialConfig,
+  LoadedCredentialConfig,
+  CredentialAuthConfig,
+  BearerAuthConfig,
+  HeaderAuthConfig,
+  MultiHeaderAuthConfig,
+  QueryAuthConfig,
+  BasicAuthConfig,
+  OAuth2AuthConfig,
+} from './credential-config-types.ts';
+
+// URL matching
+export { matchCredential, matchUrlPattern, findCredentialBySlug } from './matcher.ts';
+
+// OAuth flow
+export { runCredentialOAuthFlow, refreshCredentialToken } from './oauth-flow.ts';
+export type { CredentialOAuthOptions, CredentialOAuthResult } from './oauth-flow.ts';

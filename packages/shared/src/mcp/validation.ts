@@ -273,13 +273,16 @@ export async function validateMcpConnection(
       }
 
       // Use SDK's error field if available (new in v0.2.0), fallback to generic message
+      // Map status to valid errorType (disabled → failed since it's not a recognized errorType)
+      const mappedErrorType: McpValidationResult['errorType'] =
+        status.status === 'disabled' ? 'failed' : status.status;
       return {
         success: false,
         error: status.error || getValidationErrorMessage({
           success: false,
-          errorType: status.status,
+          errorType: mappedErrorType,
         }),
-        errorType: status.status,
+        errorType: mappedErrorType,
       };
     } catch (err) {
       // Abort on error

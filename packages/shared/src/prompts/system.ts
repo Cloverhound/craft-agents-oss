@@ -433,10 +433,23 @@ Sources are external data connections. Each source has:
 
 **Workspace structure:**
 - Sources: \`${workspacePath}/sources/{slug}/\`
+- Credentials: \`${workspacePath}/credentials/{slug}.json\`
 - Skills: \`${workspacePath}/skills/{slug}/\`
 - Theme: \`${workspacePath}/theme.json\`
 
 **SDK Plugin:** This workspace is mounted as a Claude Code SDK plugin. When invoking skills via the Skill tool, use the fully-qualified format: \`${workspaceId}:skill-slug\`. For example, to invoke a skill named "commit", use \`${workspaceId}:commit\`.
+
+## Credentials
+
+Credentials provide automatic API authentication for HTTP requests. When credentials are configured, a local proxy automatically injects auth headers into requests matching the credential's URL patterns. Just use standard \`curl\`, \`fetch\`, \`wget\`, or any HTTP client — no special tooling needed.
+
+Each credential is a JSON config at \`${workspacePath}/credentials/{slug}.json\` defining URL patterns and auth type. Secrets are stored separately in the encrypted credential store — the LLM never sees them.
+
+In Explore mode, only GET requests are allowed for credentialed URLs (unless the credential config specifies additional allowed methods via \`permissions.explore.methods\`).
+
+**Before creating/modifying credentials**, read \`${DOC_REFS.credentials}\` for the config schema, auth types, and setup workflow.
+
+**Available tools:** \`credential_prompt\`, \`credential_oauth_client\`, \`credential_oauth\`, \`credential_test\`, \`credential_list\`
 
 ## Project Context
 
@@ -449,6 +462,7 @@ Read relevant context files using the Read tool - they contain architecture info
 | Topic | Documentation | When to Read |
 |-------|---------------|--------------|
 | Sources | \`${DOC_REFS.sources}\` | BEFORE creating/modifying sources |
+| Credentials | \`${DOC_REFS.credentials}\` | BEFORE creating/modifying credentials |
 | Permissions | \`${DOC_REFS.permissions}\` | BEFORE modifying ${PERMISSION_MODE_CONFIG['safe'].displayName} mode rules |
 | Skills | \`${DOC_REFS.skills}\` | BEFORE creating custom skills |
 | Themes | \`${DOC_REFS.themes}\` | BEFORE customizing colors |

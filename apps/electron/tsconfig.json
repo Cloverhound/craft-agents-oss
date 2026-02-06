@@ -24,7 +24,9 @@
       "@/*": ["src/renderer/*"],
       "@config/*": ["../../packages/shared/src/config/*"],
       "@craft-agent/shared": ["../../packages/shared/src/index.ts"],
-      "@craft-agent/shared/*": ["../../packages/shared/src/*"]
+      "@craft-agent/shared/*": ["../../packages/shared/src/*"],
+      "@craft-agent/credential-proxy": ["../../packages/credential-proxy/src/index.ts"],
+      "@craft-agent/credential-proxy/*": ["../../packages/credential-proxy/src/*"]
     }
   },
   "include": ["src/**/*", "../../packages/shared/src/**/*.d.ts"],

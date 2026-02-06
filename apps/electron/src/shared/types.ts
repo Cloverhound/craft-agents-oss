@@ -50,6 +50,10 @@ export type { LoadedSource, FolderSourceConfig, SourceConnectionStatus };
 import type { LoadedSkill, SkillMetadata } from '@craft-agent/shared/skills/types';
 export type { LoadedSkill, SkillMetadata };
 
+// Import credential config types
+import type { LoadedCredentialConfig, CredentialConfig, CredentialAuthConfig } from '@craft-agent/shared/credentials/credential-config-types';
+export type { LoadedCredentialConfig, CredentialConfig, CredentialAuthConfig };
+
 
 /**
  * File/directory entry in a skill folder
@@ -661,6 +665,12 @@ export const IPC_CHANNELS = {
   // Session content search (full-text via ripgrep)
   SEARCH_SESSIONS: 'sessions:searchContent',
 
+  // Credentials (workspace-scoped)
+  CREDENTIALS_GET: 'credentials:get',
+  CREDENTIALS_DELETE: 'credentials:delete',
+  CREDENTIALS_OPEN_FINDER: 'credentials:openFinder',
+  CREDENTIALS_CHANGED: 'credentials:changed',
+
   // Skills (workspace-scoped)
   SKILLS_GET: 'skills:get',
   SKILLS_GET_FILES: 'skills:getFiles',
@@ -954,6 +964,13 @@ export interface ElectronAPI {
   // Skills change listener (live updates when skills are added/removed/modified)
   onSkillsChanged(callback: (skills: LoadedSkill[]) => void): () => void
 
+  // Credentials (workspace-scoped)
+  getCredentials(workspaceId: string): Promise<LoadedCredentialConfig[]>
+  deleteCredential(workspaceId: string, credentialSlug: string): Promise<void>
+  openCredentialInFinder(workspaceId: string, credentialSlug: string): Promise<void>
+  // Credentials change listener (live updates when credential configs change)
+  onCredentialsChanged?(callback: (credentials: LoadedCredentialConfig[]) => void): () => void
+
   // Statuses (workspace-scoped)
   listStatuses(workspaceId: string): Promise<import('@craft-agent/shared/statuses').StatusConfig[]>
   reorderStatuses(workspaceId: string, orderedIds: string[]): Promise<void>
@@ -1212,6 +1229,17 @@ export interface SkillsNavigationState {
 }
 
 /**
+ * Credentials navigation state - shows CredentialsListPanel in navigator
+ */
+export interface CredentialsNavigationState {
+  navigator: 'credentials'
+  /** Selected credential details or null for empty state */
+  details: { type: 'credential'; credentialSlug: string } | null
+  /** Optional right sidebar panel state */
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Unified navigation state - single source of truth for all 3 panels
  *
  * From this state we can derive:
@@ -1224,6 +1252,7 @@ export type NavigationState =
   | SourcesNavigationState
   | SettingsNavigationState
   | SkillsNavigationState
+  | CredentialsNavigationState
 
 /**
  * Type guard to check if state is chats navigation
@@ -1254,6 +1283,13 @@ export const isSkillsNavigation = (
 ): state is SkillsNavigationState => state.navigator === 'skills'
 
 /**
+ * Type guard to check if state is credentials navigation
+ */
+export const isCredentialsNavigation = (
+  state: NavigationState
+): state is CredentialsNavigationState => state.navigator === 'credentials'
+
+/**
  * Default navigation state - allChats with no selection
  */
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
@@ -1277,6 +1313,12 @@ export const getNavigationStateKey = (state: NavigationState): string => {
       return `skills/skill/${state.details.skillSlug}`
     }
     return 'skills'
+  }
+  if (state.navigator === 'credentials') {
+    if (state.details?.type === 'credential') {
+      return `credentials/credential/${state.details.credentialSlug}`
+    }
+    return 'credentials'
   }
   if (state.navigator === 'settings') {
     return `settings:${state.subpage}`
@@ -1317,6 +1359,16 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
       return { navigator: 'skills', details: { type: 'skill', skillSlug } }
     }
     return { navigator: 'skills', details: null }
+  }
+
+  // Handle credentials
+  if (key === 'credentials') return { navigator: 'credentials', details: null }
+  if (key.startsWith('credentials/credential/')) {
+    const credentialSlug = key.slice(23)
+    if (credentialSlug) {
+      return { navigator: 'credentials', details: { type: 'credential', credentialSlug } }
+    }
+    return { navigator: 'credentials', details: null }
   }
 
   // Handle settings
