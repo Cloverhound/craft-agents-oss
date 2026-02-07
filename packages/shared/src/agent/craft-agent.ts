@@ -397,6 +397,14 @@ export class CraftAgent {
   private preferencesDriftNotified: boolean = false;
   // Captured stderr from SDK subprocess (for error diagnostics when process exits with code 1)
   private lastStderrOutput: string[] = [];
+
+  // Stream health watchdog — detects SDK control stream failures
+  // Two detection modes:
+  // 1. Death spiral: consecutive "Error in hook callback" + "Stream closed" in stderr
+  // 2. Silent stall: no SDK events for STALL_TIMEOUT_MS during active turn
+  private streamHealthErrorCount: number = 0;
+  private streamHealthTriggered: boolean = false;
+  private streamHealthStallTimer: ReturnType<typeof setInterval> | null = null;
   // Last assistant message usage (for accurate context window display)
   // result.modelUsage is cumulative across the session (for billing), but we need per-message usage
   // See: https://github.com/anthropics/claude-agent-sdk-typescript/issues/66
@@ -608,6 +616,16 @@ export class CraftAgent {
   }
 
   /**
+   * Clear the stream health stall detection timer.
+   */
+  private clearStreamHealthStallTimer(): void {
+    if (this.streamHealthStallTimer) {
+      clearInterval(this.streamHealthStallTimer);
+      this.streamHealthStallTimer = null;
+    }
+  }
+
+  /**
    * Initialize heartbeat manager for this session.
    */
   private initHeartbeatManager(): void {
@@ -716,6 +734,25 @@ export class CraftAgent {
         this.lastStderrOutput.push(data);
         if (this.lastStderrOutput.length > 20) {
           this.lastStderrOutput.shift();
+        }
+
+        // Stream health watchdog: detect SDK control stream death spiral.
+        // When the control stream dies, the SDK spams "Error in hook callback"
+        // with "Stream closed" every few seconds. After 3 consecutive hits,
+        // force-stop the runner to unblock receiveUntilTurnComplete().
+        if (data.includes('Error in hook callback') && data.includes('Stream closed')) {
+          this.streamHealthErrorCount++;
+          debug(`[StreamHealth] Hook stream error #${this.streamHealthErrorCount}`);
+          if (this.streamHealthErrorCount >= 3 && this.sessionRunner && !this.streamHealthTriggered) {
+            debug('[StreamHealth] Death spiral detected — force-stopping runner for auto-recovery');
+            this.streamHealthTriggered = true;
+            this.forceStopSessionRunner();
+          }
+        } else if (data.includes('Error in hook callback')) {
+          // Hook error but not stream-closed — don't reset counter (might be mid-pattern)
+        } else {
+          // Normal stderr output — reset counter
+          this.streamHealthErrorCount = 0;
         }
       },
       ...(useAnthropicBetas ? { betas: ['advanced-tool-use-2025-11-20'] as any } : {}),
@@ -1589,8 +1626,11 @@ export class CraftAgent {
         return;
       }
 
-      // Clear stderr buffer at start of each query
+      // Clear stderr buffer and stream health state at start of each query
       this.lastStderrOutput = [];
+      this.streamHealthErrorCount = 0;
+      this.streamHealthTriggered = false;
+      this.clearStreamHealthStallTimer();
 
       // Resolve model and thinking configuration
       const isMiniAgent = this.config.systemPromptPreset === 'mini';
@@ -1653,6 +1693,23 @@ export class CraftAgent {
           this.lastStderrOutput.push(data);
           if (this.lastStderrOutput.length > 20) {
             this.lastStderrOutput.shift();
+          }
+
+          // Stream health watchdog: detect SDK control stream death spiral.
+          // (Same logic as SessionRunner path — see buildSessionOptions for details)
+          if (data.includes('Error in hook callback') && data.includes('Stream closed')) {
+            this.streamHealthErrorCount++;
+            debug(`[StreamHealth] Hook stream error #${this.streamHealthErrorCount}`);
+            if (this.streamHealthErrorCount >= 3 && this.sessionRunner && !this.streamHealthTriggered) {
+              debug('[StreamHealth] Death spiral detected — force-stopping runner for auto-recovery');
+              this.streamHealthTriggered = true;
+              this.forceStopSessionRunner();
+            }
+          } else if (data.includes('Error in hook callback')) {
+            // Hook error but not stream-closed — don't reset counter (might be mid-pattern)
+          } else {
+            // Normal stderr output — reset counter
+            this.streamHealthErrorCount = 0;
           }
         },
         // Beta features (only when using direct Anthropic API, not OpenRouter/etc.)
@@ -2346,8 +2403,33 @@ export class CraftAgent {
       // Track whether we received any assistant content (for empty response detection)
       // When SDK returns empty response (e.g., failed resume), we need to detect and recover
       let receivedAssistantContent = false;
+
+      // Stream health: stall detection timer.
+      // If the SDK stops producing events entirely (silent death — no stderr errors,
+      // no messages, just silence), this timer fires after 90s and force-stops the runner.
+      // IMPORTANT: The timer is paused while tools are executing — a 5-minute Bash
+      // command produces no SDK events but the stream is alive and healthy.
+      const STALL_TIMEOUT_MS = 90_000;
+      let activeToolCount = 0;
+      const resetStallTimer = () => {
+        this.clearStreamHealthStallTimer();
+        // Only start the timer when no tools are in-flight
+        if (activeToolCount > 0) return;
+        this.streamHealthStallTimer = setInterval(() => {
+          if (this.sessionRunner && !this.streamHealthTriggered) {
+            debug('[StreamHealth] Stall detected — no SDK events for 90s, force-stopping runner');
+            this.streamHealthTriggered = true;
+            this.forceStopSessionRunner();
+          }
+        }, STALL_TIMEOUT_MS);
+      };
+      resetStallTimer();
+
       try {
         for await (const message of runner.receiveUntilTurnComplete()) {
+          // Reset stall timer on every message — the stream is alive
+          resetStallTimer();
+
           // Track if we got any text content from assistant
           if ('type' in message && message.type === 'assistant' && 'message' in message) {
             const assistantMsg = message.message as { content?: unknown[] };
@@ -2431,9 +2513,24 @@ export class CraftAgent {
             if (event.type === 'complete') {
               receivedComplete = true;
             }
+
+            // Track tool lifecycle for stall timer management.
+            // When a tool starts, pause the stall timer (long tools like Bash produce
+            // no SDK events). When it finishes, restart the timer.
+            if (event.type === 'tool_start') {
+              activeToolCount++;
+              this.clearStreamHealthStallTimer(); // Pause during tool execution
+            } else if (event.type === 'tool_result') {
+              activeToolCount = Math.max(0, activeToolCount - 1);
+              resetStallTimer(); // Restart if no tools in-flight
+            }
+
             yield event;
           }
         }
+
+        // Clear stall timer — turn completed normally
+        this.clearStreamHealthStallTimer();
 
         // Detect empty response when resuming - SDK silently fails resume if session is invalid
         // In this case, we got a new session ID but no assistant content
@@ -2473,6 +2570,9 @@ export class CraftAgent {
           yield { type: 'complete' };
         }
       } catch (sdkError) {
+        // Always clear stall timer on error exit
+        this.clearStreamHealthStallTimer();
+
         // Debug: log inner catch trigger (stderr to avoid SDK JSON pollution)
         console.error(`[CraftAgent] INNER CATCH triggered: ${sdkError instanceof Error ? sdkError.message : String(sdkError)}`);
 
@@ -2482,6 +2582,28 @@ export class CraftAgent {
         if (sdkError instanceof ForceStopError) {
           const reason = this.lastAbortReason;
           this.lastAbortReason = null;
+
+          // Stream health auto-recovery: if the watchdog triggered forceStop (not a
+          // user/plan/redirect abort), clean up the dead session and auto-retry.
+          // The _isRetry guard prevents infinite loops.
+          if (this.streamHealthTriggered && !_isRetry) {
+            debug('[StreamHealth] Auto-recovery: clearing dead session and retrying');
+            // Clean up dead session state
+            this.sessionId = null;
+            this.config.onSdkSessionIdCleared?.();
+            this.pinnedPreferencesPrompt = null;
+            this.preferencesDriftNotified = false;
+
+            // Build context prefix so the LLM knows it was interrupted
+            const recoveryContext = this.buildRecoveryContext();
+            const contextPrefix = '> **Note:** Your previous response was interrupted by a connection issue. Continue where you left off.\n\n';
+            const messageWithContext = contextPrefix + (recoveryContext ? recoveryContext + userMessage : userMessage);
+
+            yield { type: 'info', message: 'Connection recovered — continuing...' };
+            yield* this.chat(messageWithContext, attachments, true);
+            return;
+          }
+
           if (reason === AbortReason.UserStop) {
             yield { type: 'status', message: 'Interrupted' };
           }
@@ -3827,6 +3949,7 @@ Please continue the conversation naturally from where we left off.
     // Stop persistent session (background tasks will be terminated)
     this.forceStopSessionRunner();
     this.stopHeartbeatManager();
+    this.clearStreamHealthStallTimer();
 
     // Clear session to start fresh conversation
     this.sessionId = null;
@@ -4043,6 +4166,7 @@ Please continue the conversation naturally from where we left off.
     // Stop persistent session infrastructure
     this.forceStopSessionRunner();
     this.stopHeartbeatManager();
+    this.clearStreamHealthStallTimer();
 
     // Clear pending operations
     this.pendingPermissions.clear();

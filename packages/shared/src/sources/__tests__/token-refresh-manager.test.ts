@@ -93,14 +93,14 @@ describe('TokenRefreshManager', () => {
         isExpired: true,
         refreshResult: null,
       });
-      // Use very short cooldown for testing
-      const manager = new TokenRefreshManager(credManager, { cooldownMs: 1 });
+      // Use short cooldown for testing (50ms provides margin under heavy parallel load)
+      const manager = new TokenRefreshManager(credManager, { cooldownMs: 50 });
       const source = createMockSource({ slug: 'test-source' });
 
       await manager.ensureFreshToken(source);
 
-      // Wait for cooldown to expire
-      await new Promise(resolve => setTimeout(resolve, 5));
+      // Wait for cooldown to expire (100ms > 50ms cooldown)
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       expect(manager.isInCooldown('test-source')).toBe(false);
     });
@@ -257,15 +257,15 @@ describe('TokenRefreshManager', () => {
         markSourceNeedsReauth: mock(() => {}),
       } as unknown as SourceCredentialManager;
 
-      const manager = new TokenRefreshManager(credManager, { cooldownMs: 1 });
+      const manager = new TokenRefreshManager(credManager, { cooldownMs: 50 });
       const source = createMockSource({ slug: 'test-source' });
 
       // First call fails
       await manager.ensureFreshToken(source);
       expect(manager.isInCooldown('test-source')).toBe(true);
 
-      // Wait for cooldown
-      await new Promise(resolve => setTimeout(resolve, 5));
+      // Wait for cooldown (100ms > 50ms cooldown)
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       // Second call succeeds
       const result = await manager.ensureFreshToken(source);

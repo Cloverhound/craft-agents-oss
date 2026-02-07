@@ -12,10 +12,13 @@ import { describe, it, expect, afterEach } from 'bun:test';
 import { startProxy, type ProxyInstance } from '../proxy';
 import type { LoadedCredentialConfig } from '@craft-agent/shared/credentials/credential-config-types';
 
-// Check httpbin.org availability — skip MITM tests when unreachable
-const httpbinAvailable = await fetch('https://httpbin.org/get', {
-  signal: AbortSignal.timeout(5000),
-}).then(r => r.ok).catch(() => false);
+// Check external service availability — skip tests when unreachable
+const [googleAvailable, httpbinAvailable] = await Promise.all([
+  fetch('https://www.google.com/', { signal: AbortSignal.timeout(5000) })
+    .then(r => r.ok).catch(() => false),
+  fetch('https://httpbin.org/get', { signal: AbortSignal.timeout(5000) })
+    .then(r => r.ok).catch(() => false),
+]);
 
 function makeCred(overrides: Partial<LoadedCredentialConfig> & { slug: string; urlPatterns: string[] }): LoadedCredentialConfig {
   const { slug, urlPatterns, name, auth, ...rest } = overrides;
@@ -31,7 +34,7 @@ function makeCred(overrides: Partial<LoadedCredentialConfig> & { slug: string; u
   };
 }
 
-describe('Proxy Integration — real HTTPS tunnel', () => {
+describe.skipIf(!googleAvailable)('Proxy Integration — real HTTPS tunnel', () => {
   let proxy: ProxyInstance | null = null;
 
   afterEach(() => {

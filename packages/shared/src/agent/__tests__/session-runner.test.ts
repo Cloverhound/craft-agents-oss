@@ -288,4 +288,162 @@ describe('SessionRunner', () => {
       expect(debugMessages.some(m => m.includes('Force stopping'))).toBe(true);
     });
   });
+
+  describe('forceStop() via Promise.race cancellation', () => {
+    /**
+     * Helper: creates a SessionRunner with internal state mocked to 'active'
+     * and a controllable async iterator. This simulates a running session
+     * without needing the real SDK subprocess.
+     */
+    function createActiveRunner(): {
+      runner: SessionRunner;
+      emitMessage: (msg: SDKMessage) => void;
+      endIterator: () => void;
+    } {
+      const config: SessionRunnerConfig = {
+        options: {} as Options,
+      };
+      const runner = new SessionRunner(config);
+
+      // Message queue and resolver for the fake iterator
+      const queue: SDKMessage[] = [];
+      let pendingResolve: ((result: IteratorResult<SDKMessage>) => void) | null = null;
+      let iteratorDone = false;
+
+      // Fake async iterator that blocks on next() until we push a message
+      const fakeIterator: AsyncIterator<SDKMessage> = {
+        next(): Promise<IteratorResult<SDKMessage>> {
+          if (queue.length > 0) {
+            return Promise.resolve({ value: queue.shift()!, done: false });
+          }
+          if (iteratorDone) {
+            return Promise.resolve({ value: undefined as any, done: true });
+          }
+          return new Promise((resolve) => {
+            pendingResolve = resolve;
+          });
+        },
+      };
+
+      // Set up internal state to simulate an active session
+      (runner as any)._state = 'active';
+      (runner as any).channel = { push: () => {}, close: () => {} };
+      (runner as any).responseIterator = fakeIterator;
+      (runner as any).queryInstance = {};
+
+      // Create the forceStop cancellation promise (same as real start())
+      (runner as any).forceStopPromise = new Promise<never>((_, reject) => {
+        (runner as any).forceStopResolve = () => reject(new ForceStopError());
+      });
+
+      return {
+        runner,
+        emitMessage: (msg: SDKMessage) => {
+          if (pendingResolve) {
+            const resolve = pendingResolve;
+            pendingResolve = null;
+            resolve({ value: msg, done: false });
+          } else {
+            queue.push(msg);
+          }
+        },
+        endIterator: () => {
+          iteratorDone = true;
+          if (pendingResolve) {
+            const resolve = pendingResolve;
+            pendingResolve = null;
+            resolve({ value: undefined as any, done: true });
+          }
+        },
+      };
+    }
+
+    it('should throw ForceStopError immediately when forceStop() is called during pending .next()', async () => {
+      const { runner } = createActiveRunner();
+
+      // Start iterating — this will block on .next() since no messages are queued
+      const iteratePromise = (async () => {
+        const messages: SDKMessage[] = [];
+        for await (const msg of runner.receiveUntilTurnComplete()) {
+          messages.push(msg);
+        }
+        return messages;
+      })();
+
+      // Give the iterator time to enter the await .next() call
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Force stop — this should immediately unblock via Promise.race
+      runner.forceStop();
+
+      // The iteration should reject with ForceStopError
+      await expect(iteratePromise).rejects.toThrow(ForceStopError);
+    });
+
+    it('should unblock within milliseconds, not seconds', async () => {
+      const { runner } = createActiveRunner();
+
+      const startTime = Date.now();
+
+      const iteratePromise = (async () => {
+        for await (const _ of runner.receiveUntilTurnComplete()) {
+          // will never yield — no messages emitted
+        }
+      })();
+
+      // Small delay to ensure we're blocked on .next()
+      await new Promise((r) => setTimeout(r, 5));
+
+      runner.forceStop();
+
+      try {
+        await iteratePromise;
+      } catch {
+        // Expected ForceStopError
+      }
+
+      const elapsed = Date.now() - startTime;
+      // Should resolve almost immediately — well under 1 second
+      expect(elapsed).toBeLessThan(500);
+    });
+
+    it('should allow receiving messages before forceStop interrupts', async () => {
+      const { runner, emitMessage } = createActiveRunner();
+
+      // Queue a message before iterating
+      emitMessage(createTextDeltaMessage('hello'));
+
+      let messageCount = 0;
+      const iteratePromise = (async () => {
+        for await (const _msg of runner.receiveUntilTurnComplete()) {
+          messageCount++;
+          // After first message, forceStop while blocked on next .next()
+          if (messageCount === 1) {
+            // Small delay to ensure we re-enter the await
+            setTimeout(() => runner.forceStop(), 10);
+          }
+        }
+      })();
+
+      await expect(iteratePromise).rejects.toThrow(ForceStopError);
+      expect(messageCount).toBe(1);
+    });
+
+    it('should yield all messages then break normally on result type (no forceStop)', async () => {
+      const { runner, emitMessage } = createActiveRunner();
+
+      // Queue messages including a 'result' to end the turn
+      emitMessage(createInitMessage('sess-1'));
+      emitMessage(createTextDeltaMessage('thinking...'));
+      emitMessage(createResultMessage('sess-1', 'done'));
+
+      const messages: SDKMessage[] = [];
+      for await (const msg of runner.receiveUntilTurnComplete()) {
+        messages.push(msg);
+      }
+
+      expect(messages).toHaveLength(3);
+      expect(messages[2].type).toBe('result');
+    });
+  });
 });

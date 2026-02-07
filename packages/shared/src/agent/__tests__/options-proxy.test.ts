@@ -5,12 +5,37 @@
  * that are injected into the SDK subprocess environment.
  */
 
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { setProxyConfig, clearProxyConfig, getDefaultOptions } from '../options';
 
+// Env vars that the proxy config injects — must be saved/restored so that
+// a live Craft Agent session (which sets HTTP_PROXY etc.) doesn't leak into tests.
+const PROXY_ENV_KEYS = [
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE',
+] as const;
+
 describe('getDefaultOptions proxy config', () => {
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    // Save and clear proxy-related env vars to isolate tests from live environment
+    for (const key of PROXY_ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
   afterEach(() => {
     clearProxyConfig();
+    // Restore original env vars
+    for (const key of PROXY_ENV_KEYS) {
+      if (savedEnv[key] !== undefined) {
+        process.env[key] = savedEnv[key];
+      } else {
+        delete process.env[key];
+      }
+    }
   });
 
   it('includes no proxy env vars when proxy is not configured', () => {

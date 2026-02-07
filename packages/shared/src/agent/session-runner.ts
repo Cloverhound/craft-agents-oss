@@ -84,6 +84,11 @@ export class SessionRunner {
   private _error: Error | null = null;
   private _sessionId: string | null = null;
 
+  // Cancellation signal for forceStop() — allows Promise.race to immediately
+  // unblock a pending .next() call in receiveUntilTurnComplete()
+  private forceStopResolve: (() => void) | null = null;
+  private forceStopPromise: Promise<never> | null = null;
+
   constructor(private config: SessionRunnerConfig) {
     // Initialize session ID from config (for resume scenarios) or generate a temp one
     this._sessionId = config.sessionId || `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -144,6 +149,13 @@ export class SessionRunner {
 
       // Get the async iterator for responses
       this.responseIterator = this.queryInstance[Symbol.asyncIterator]();
+
+      // Create cancellation promise for forceStop() — rejects with ForceStopError
+      // when forceStop() is called, immediately unblocking any Promise.race in
+      // receiveUntilTurnComplete(). Reset on each start() for reuse after recovery.
+      this.forceStopPromise = new Promise<never>((_, reject) => {
+        this.forceStopResolve = () => reject(new ForceStopError());
+      });
 
       this._state = 'active';
       this.config.onDebug?.('[SessionRunner] Session active');
@@ -223,7 +235,15 @@ export class SessionRunner {
           throw new ForceStopError();
         }
 
-        const result = await this.responseIterator.next();
+        // Race the iterator against the forceStop signal.
+        // Without this, a pending .next() blocks forever when the SDK subprocess
+        // stops producing output (dead control stream, hung MCP call, etc.).
+        const result = this.forceStopPromise
+          ? await Promise.race([
+              this.responseIterator.next(),
+              this.forceStopPromise,
+            ])
+          : await this.responseIterator.next();
 
         if (result.done) {
           // Iterator exhausted - subprocess exited
@@ -294,6 +314,12 @@ export class SessionRunner {
    */
   forceStop(): void {
     this.config.onDebug?.('[SessionRunner] Force stopping session');
+
+    // Trigger cancellation FIRST — unblocks any pending .next() via Promise.race
+    if (this.forceStopResolve) {
+      this.forceStopResolve();
+      this.forceStopResolve = null;
+    }
 
     if (this.channel) {
       this.channel.close();
