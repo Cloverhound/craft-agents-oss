@@ -53,7 +53,10 @@ export function createQueuePushTool(sessionId: string, workspaceRootPath: string
     `Create a new task in the work queue.
 
 Validates the task type exists and required fields are present.
-Returns the created task with its generated ID.`,
+Returns the created task with its generated ID.
+
+If the task type has a dedupTemplate (or dedupId is provided), existing tasks with the same
+resolved dedupId are upserted: data/title/priority/labels are updated, state is preserved.`,
     {
       typeSlug: z.string().describe('Task type slug (must exist)'),
       title: z.string().describe('Human-readable task title'),
@@ -61,6 +64,7 @@ Returns the created task with its generated ID.`,
       priority: z.number().optional().describe('Numeric priority (lower = higher). Optional.'),
       labels: z.array(z.string()).optional().describe('Labels (bare IDs or "id::value" format)'),
       state: z.string().optional().describe('Initial state ID. Defaults to the type default state.'),
+      dedupId: z.string().optional().describe('Explicit dedup ID for idempotent upserts. Overrides dedupTemplate resolution.'),
     },
     async (args) => {
       debug('[queue_push] Creating task:', args.title);
@@ -72,6 +76,7 @@ Returns the created task with its generated ID.`,
           priority: args.priority,
           labels: args.labels,
           state: args.state,
+          dedupId: args.dedupId,
           sourceSessionId: sessionId,
         });
 
@@ -106,7 +111,10 @@ export function createQueueBulkPushTool(sessionId: string, workspaceRootPath: st
     `Create multiple tasks in the work queue in a single batch operation.
 
 Each task is validated independently. Returns per-item results (success or error).
-Useful for bulk operations like queueing all overdue invoices.`,
+Useful for bulk operations like queueing all overdue invoices.
+
+If the task type has a dedupTemplate (or dedupId is provided per task), existing tasks
+with matching dedupIds are upserted rather than duplicated.`,
     {
       tasks: z.array(z.object({
         typeSlug: z.string(),
@@ -115,6 +123,7 @@ Useful for bulk operations like queueing all overdue invoices.`,
         priority: z.number().optional(),
         labels: z.array(z.string()).optional(),
         state: z.string().optional(),
+        dedupId: z.string().optional(),
       })).describe('Array of task definitions to create'),
     },
     async (args) => {
@@ -355,6 +364,7 @@ Creates the type directory with config.json and a skeleton display.md template.
       icon: z.string().optional().describe('Emoji or URL for the type icon'),
       tagline: z.string().optional().describe('Short tagline for list display'),
       source: z.string().optional().describe('Source integration slug (e.g., "xero", "znuny")'),
+      dedupTemplate: z.string().optional().describe('Dedup template with {field} placeholders for idempotent upserts (e.g., "xero:{invoice_number}")'),
       fields: z.record(z.string(), z.object({
         type: z.enum(['string', 'number', 'date', 'url', 'boolean', 'json']),
         label: z.string(),
@@ -381,6 +391,7 @@ Creates the type directory with config.json and a skeleton display.md template.
           icon: args.icon,
           tagline: args.tagline,
           source: args.source,
+          dedupTemplate: args.dedupTemplate,
           fields: args.fields as Record<string, TaskFieldDefinition>,
           states: args.states as TaskStateConfig[],
         });

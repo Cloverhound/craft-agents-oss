@@ -132,6 +132,21 @@ export function validateTaskType(typeConfig: TaskTypeConfig): QueueValidationRes
     }
   }
 
+  // Dedup template
+  if (typeConfig.dedupTemplate) {
+    const placeholders = typeConfig.dedupTemplate.match(/\{([^}]+)\}/g);
+    if (placeholders) {
+      for (const placeholder of placeholders) {
+        const fieldName = placeholder.slice(1, -1);
+        if (!typeConfig.fields[fieldName]) {
+          errors.push(`dedupTemplate references unknown field '${fieldName}'`);
+        }
+      }
+    } else {
+      warnings.push(`dedupTemplate has no {field} placeholders — it will produce the same dedupId for every task`);
+    }
+  }
+
   // Fields
   if (typeConfig.fields) {
     const validFieldTypes = ['string', 'number', 'date', 'url', 'boolean', 'json'];
@@ -258,6 +273,22 @@ export function validateQueue(workspaceRootPath: string): QueueValidationResult 
   for (const typeSlug of referencedTypes) {
     if (!typeMap.has(typeSlug)) {
       warnings.push(`Orphaned tasks reference deleted type '${typeSlug}'`);
+    }
+  }
+
+  // 5. Check for duplicate dedupIds within the same type
+  const dedupIndex = new Map<string, string[]>(); // "typeSlug:dedupId" → [taskIds]
+  for (const taskId of taskIds) {
+    const task = loadTask(workspaceRootPath, taskId);
+    if (task?.dedupId) {
+      const key = `${task.typeSlug}:${task.dedupId}`;
+      if (!dedupIndex.has(key)) dedupIndex.set(key, []);
+      dedupIndex.get(key)!.push(task.id);
+    }
+  }
+  for (const [key, ids] of dedupIndex) {
+    if (ids.length > 1) {
+      warnings.push(`Duplicate dedupId '${key}' shared by tasks: ${ids.join(', ')}`);
     }
   }
 

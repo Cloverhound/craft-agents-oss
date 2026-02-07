@@ -17,6 +17,7 @@ import {
   generateTypeSlug,
   ensureQueueDirs,
   getQueueTypePath,
+  findTaskByDedupId,
 } from './storage.ts';
 import type {
   TaskTypeConfig,
@@ -27,6 +28,30 @@ import type {
 } from './types.ts';
 import { existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
+
+// ============================================================
+// Dedup Resolution
+// ============================================================
+
+/**
+ * Resolve a dedupTemplate by substituting {field} placeholders with data values.
+ * Returns the resolved string, or null if any referenced field is missing.
+ */
+export function resolveDedupId(template: string, data: Record<string, unknown>): string | null {
+  let resolved = template;
+  const placeholders = template.match(/\{([^}]+)\}/g);
+
+  if (!placeholders) return template;
+
+  for (const placeholder of placeholders) {
+    const fieldName = placeholder.slice(1, -1);
+    const value = data[fieldName];
+    if (value === undefined || value === null) return null;
+    resolved = resolved.replace(placeholder, String(value));
+  }
+
+  return resolved;
+}
 
 // ============================================================
 // Task Type CRUD
@@ -74,6 +99,7 @@ export function createTaskType(
     icon: input.icon,
     tagline: input.tagline,
     source: input.source,
+    dedupTemplate: input.dedupTemplate,
     fields: input.fields,
     states: input.states,
     displayTemplate: input.displayTemplate ?? 'display.md',
@@ -116,7 +142,7 @@ ${fieldLines}
 export function updateTaskType(
   workspaceRootPath: string,
   typeSlug: string,
-  updates: Partial<Pick<TaskTypeConfig, 'name' | 'description' | 'icon' | 'tagline' | 'source' | 'fields' | 'states' | 'displayTemplate'>>
+  updates: Partial<Pick<TaskTypeConfig, 'name' | 'description' | 'icon' | 'tagline' | 'source' | 'dedupTemplate' | 'fields' | 'states' | 'displayTemplate'>>
 ): TaskTypeConfig {
   const existing = loadTaskType(workspaceRootPath, typeSlug);
   if (!existing) {
@@ -128,6 +154,7 @@ export function updateTaskType(
   if (updates.icon !== undefined) existing.icon = updates.icon;
   if (updates.tagline !== undefined) existing.tagline = updates.tagline;
   if (updates.source !== undefined) existing.source = updates.source;
+  if (updates.dedupTemplate !== undefined) existing.dedupTemplate = updates.dedupTemplate;
   if (updates.fields !== undefined) existing.fields = updates.fields;
   if (updates.states !== undefined) existing.states = updates.states;
   if (updates.displayTemplate !== undefined) existing.displayTemplate = updates.displayTemplate;
@@ -211,10 +238,33 @@ export function createTask(
     throw new Error(`State '${initialState}' is not valid for type '${input.typeSlug}'`);
   }
 
+  // Resolve dedupId: explicit input takes precedence, then template
+  let dedupId: string | undefined;
+  if (input.dedupId) {
+    dedupId = input.dedupId;
+  } else if (typeConfig.dedupTemplate) {
+    dedupId = resolveDedupId(typeConfig.dedupTemplate, input.data) ?? undefined;
+  }
+
+  // Upsert: if dedupId resolves and an existing task matches, update it
+  if (dedupId) {
+    const existing = findTaskByDedupId(workspaceRootPath, input.typeSlug, dedupId);
+    if (existing) {
+      existing.title = input.title;
+      existing.data = { ...existing.data, ...input.data };
+      if (input.priority !== undefined) existing.priority = input.priority;
+      if (input.labels) existing.labels = input.labels;
+      existing.updatedAt = Date.now();
+      saveTask(workspaceRootPath, existing);
+      return existing;
+    }
+  }
+
   const now = Date.now();
   const task: QueueTask = {
     id: generateTaskId(),
     typeSlug: input.typeSlug,
+    dedupId,
     title: input.title,
     state: initialState,
     priority: input.priority,

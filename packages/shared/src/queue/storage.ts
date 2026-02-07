@@ -346,6 +346,27 @@ export function listTaskIds(workspaceRootPath: string): string[] {
 }
 
 /**
+ * Find a task by its dedupId within a specific type.
+ * Returns the first matching task, or null if none found.
+ */
+export function findTaskByDedupId(
+  workspaceRootPath: string,
+  typeSlug: string,
+  dedupId: string
+): QueueTask | null {
+  const taskIds = listTaskIds(workspaceRootPath);
+
+  for (const id of taskIds) {
+    const task = loadTask(workspaceRootPath, id);
+    if (task && task.typeSlug === typeSlug && task.dedupId === dedupId) {
+      return task;
+    }
+  }
+
+  return null;
+}
+
+/**
  * List tasks with optional filtering.
  * Loads all tasks from disk, applies filters, and returns sorted results.
  */

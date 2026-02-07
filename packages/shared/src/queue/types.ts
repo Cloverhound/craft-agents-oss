@@ -117,6 +117,13 @@ export interface TaskTypeConfig {
   /** Optional link to originating source integration slug */
   source?: string;
 
+  /**
+   * Dedup template — a pattern string with {field} placeholders that resolves
+   * to a deterministic dedup ID from task data. Makes push operations idempotent.
+   * Example: "xero:{invoice_number}" → "xero:INV-2828"
+   */
+  dedupTemplate?: string;
+
   /** Field schema — defines the typed data payload for tasks of this type */
   fields: Record<string, TaskFieldDefinition>;
 
@@ -144,6 +151,9 @@ export interface QueueTask {
 
   /** Task type slug — links to the type definition */
   typeSlug: string;
+
+  /** Resolved dedup ID (from dedupTemplate + data). Used for idempotent upserts. */
+  dedupId?: string;
 
   /** Human-readable task title */
   title: string;
@@ -188,6 +198,7 @@ export interface CreateTaskTypeInput {
   icon?: string;
   tagline?: string;
   source?: string;
+  dedupTemplate?: string;
   fields: Record<string, TaskFieldDefinition>;
   states: TaskStateConfig[];
   displayTemplate?: string;
@@ -204,6 +215,8 @@ export interface CreateTaskInput {
   labels?: string[];
   sourceSessionId?: string;
   state?: string;
+  /** Explicit dedup ID (overrides dedupTemplate resolution) */
+  dedupId?: string;
 }
 
 /**
