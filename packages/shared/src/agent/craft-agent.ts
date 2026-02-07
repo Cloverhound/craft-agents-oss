@@ -2435,10 +2435,11 @@ export class CraftAgent {
       // command produces no SDK events but the stream is alive and healthy.
       const STALL_TIMEOUT_MS = 90_000;
       let activeToolCount = 0;
+      let isCompacting = false; // Pause stall timer during /compact (can take >90s)
       const resetStallTimer = () => {
         this.clearStreamHealthStallTimer();
-        // Only start the timer when no tools are in-flight
-        if (activeToolCount > 0) return;
+        // Only start the timer when no tools are in-flight and not compacting
+        if (activeToolCount > 0 || isCompacting) return;
         this.streamHealthStallTimer = setInterval(() => {
           if (this.sessionRunner && !this.streamHealthTriggered) {
             debug('[StreamHealth] Stall detected — no SDK events for 90s, force-stopping runner');
@@ -2451,6 +2452,16 @@ export class CraftAgent {
 
       try {
         for await (const message of runner.receiveUntilTurnComplete()) {
+          // Pause stall timer during compaction (can take >90s for large contexts)
+          if ('type' in message && message.type === 'system' && 'subtype' in message) {
+            if ((message as any).subtype === 'status' && (message as any).status === 'compacting') {
+              isCompacting = true;
+              this.clearStreamHealthStallTimer();
+            } else if ((message as any).subtype === 'compact_boundary') {
+              isCompacting = false;
+            }
+          }
+
           // Reset stall timer on every message — the stream is alive
           resetStallTimer();
 

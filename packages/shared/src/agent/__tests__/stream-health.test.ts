@@ -248,6 +248,54 @@ describe('Stream Health Watchdog', () => {
       expect(stallTimerActive).toBe(true);
       expect(activeToolCount).toBe(0);
     });
+
+    it('stall timer should pause during compaction and resume after', () => {
+      let activeToolCount = 0;
+      let isCompacting = false;
+      let stallTimerActive = false;
+
+      const resetStallTimer = () => {
+        stallTimerActive = activeToolCount === 0 && !isCompacting;
+      };
+
+      // Normal state — timer is active
+      resetStallTimer();
+      expect(stallTimerActive).toBe(true);
+
+      // Compaction starts — timer should pause
+      isCompacting = true;
+      resetStallTimer();
+      expect(stallTimerActive).toBe(false);
+
+      // Compaction finishes — timer should resume
+      isCompacting = false;
+      resetStallTimer();
+      expect(stallTimerActive).toBe(true);
+    });
+
+    it('stall timer should stay paused if tools are in-flight during compaction', () => {
+      let activeToolCount = 1; // Tool running
+      let isCompacting = true; // Also compacting
+      let stallTimerActive = false;
+
+      const resetStallTimer = () => {
+        stallTimerActive = activeToolCount === 0 && !isCompacting;
+      };
+
+      // Both conditions block the timer
+      resetStallTimer();
+      expect(stallTimerActive).toBe(false);
+
+      // Compaction ends but tool still running
+      isCompacting = false;
+      resetStallTimer();
+      expect(stallTimerActive).toBe(false);
+
+      // Tool also ends — now timer can restart
+      activeToolCount = 0;
+      resetStallTimer();
+      expect(stallTimerActive).toBe(true);
+    });
   });
 
   describe('recovery guard (_isRetry)', () => {
