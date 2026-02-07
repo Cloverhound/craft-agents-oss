@@ -11,7 +11,7 @@
  * - ~/.craft-agent/themes/*.json - Preset theme files (app-level)
  * - ~/.craft-agent/workspaces/{slug}/ - Workspace directory (recursive)
  *   - sources/{slug}/config.json, guide.md, permissions.json
- *   - skills/{slug}/SKILL.md, icon.*
+ *   - skills/{slug}/SKILL.md, icon.*, permissions.json
  *   - credentials/{slug}.json
  *   - sessions/{id}/session.jsonl (header metadata only)
  *   - permissions.json

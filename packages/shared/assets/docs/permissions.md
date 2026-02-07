@@ -10,6 +10,7 @@ Custom permission rules let you allow specific operations that would otherwise b
 Permission files are located at:
 - Workspace: `~/.craft-agent/workspaces/{slug}/permissions.json`
 - Source: `~/.craft-agent/workspaces/{slug}/sources/{source}/permissions.json`
+- Skill: `~/.craft-agent/workspaces/{slug}/skills/{skill}/permissions.json`
 
 ## Auto-Scoping for Source Permissions
 
@@ -185,12 +186,39 @@ These constructs are always blocked, even if the base command is allowed:
 
 Example: `git status > file.txt` is blocked because `>` could overwrite files.
 
+## Skill-Level Permissions
+
+Skills can include a `permissions.json` file to extend Explore mode rules when the skill is invoked.
+
+**File location:** `~/.craft-agent/workspaces/{slug}/skills/{skill}/permissions.json`
+
+**Key behavior:**
+- Uses the same schema as source/workspace permissions
+- **Lazy activation** — permissions only load after the skill is invoked via `/skill-name`, not on discovery
+- MCP patterns are applied as-is (no auto-scoping, since skills don't own MCP servers)
+- Common use case: allowing a skill's CLI binary in Explore mode
+
+**Example** — allowing read-only commands for a CLI skill:
+```json
+{
+  "allowedBashPatterns": [
+    {
+      "pattern": "^~/.craft-agent/workspaces/.*/skills/xero/bin/xero\\s+(tenants|use|contacts?|invoices?|bills?|payments|bank-accounts|bank-transactions|report:(pnl|balance|aged-receivables|aged-payables)|accounts|credit-notes|quotes|help)(\\s|$)",
+      "comment": "Xero CLI — read-only commands only (excludes create/approve/void)"
+    }
+  ]
+}
+```
+
+The `(\s|$)` boundary ensures the command must be followed by whitespace (for flags/args) or end-of-string — so `invoice --status PAID` is allowed, but `invoice:create` is blocked because `:` is neither whitespace nor end-of-string.
+
 ## Cascading Rules
 
-Rules cascade from workspace → source → agent:
-1. Workspace rules apply globally
-2. Source rules extend workspace rules for that source
-3. Agent rules extend both for that agent's session
+Rules cascade from workspace → source → skill → agent:
+1. App default rules apply globally
+2. Workspace rules extend app defaults
+3. Source rules extend workspace rules (with auto-scoped MCP patterns)
+4. Skill rules extend all the above (activated on skill invocation)
 
 Rules are additive - they can only allow more operations, not restrict further.
 

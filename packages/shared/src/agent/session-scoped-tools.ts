@@ -40,6 +40,7 @@ import {
   validateAllSkills,
   validateWorkspacePermissions,
   validateSourcePermissions,
+  validateSkillPermissions,
   validateAllPermissions,
   validateToolIcons,
   formatValidationResult,
@@ -431,12 +432,13 @@ Returns structured validation results with errors, warnings, and suggestions.
 - \`sources\`: Validates all sources in ~/.craft-agent/workspaces/{workspace}/sources/*/config.json
 - \`statuses\`: Validates ~/.craft-agent/workspaces/{workspace}/statuses/config.json (workflow states)
 - \`preferences\`: Validates ~/.craft-agent/preferences.json (user preferences)
-- \`permissions\`: Validates permissions.json files (workspace, source, and app-level default)
+- \`permissions\`: Validates permissions.json files (workspace, source, skill, and app-level default)
 - \`tool-icons\`: Validates ~/.craft-agent/tool-icons/tool-icons.json (CLI tool icon mappings)
 - \`all\`: Validates all configuration files
 
 **For specific source validation:** Use target='sources' with sourceSlug parameter.
 **For specific source permissions:** Use target='permissions' with sourceSlug parameter.
+**For specific skill permissions:** Use target='permissions' with skillSlug parameter.
 
 **Example workflow:**
 1. Edit a config file using Write/Edit tools
@@ -450,9 +452,12 @@ Returns structured validation results with errors, warnings, and suggestions.
       sourceSlug: z.string().optional().describe(
         'Validate a specific source by slug (used with target "sources" or "permissions")'
       ),
+      skillSlug: z.string().optional().describe(
+        'Validate a specific skill\'s permissions by slug (used with target "permissions")'
+      ),
     },
     async (args) => {
-      debug('[config_validate] Validating:', args.target, 'sourceSlug:', args.sourceSlug);
+      debug('[config_validate] Validating:', args.target, 'sourceSlug:', args.sourceSlug, 'skillSlug:', args.skillSlug);
 
       try {
         let result;
@@ -477,6 +482,8 @@ Returns structured validation results with errors, warnings, and suggestions.
           case 'permissions':
             if (args.sourceSlug) {
               result = validateSourcePermissions(workspaceRootPath, args.sourceSlug);
+            } else if (args.skillSlug) {
+              result = validateSkillPermissions(workspaceRootPath, args.skillSlug);
             } else {
               result = validateAllPermissions(workspaceRootPath);
             }
@@ -531,6 +538,7 @@ Checks:
 - YAML frontmatter is valid with required fields (name, description)
 - Content is non-empty after frontmatter
 - Icon format if present (svg/png/jpg)
+- permissions.json validity if present (schema, regex patterns)
 
 **Usage:** Call after creating or editing a skill to verify it's valid.
 
@@ -543,6 +551,20 @@ Checks:
 
       try {
         const result = validateSkill(workspaceRoot, args.skillSlug);
+
+        // Also validate permissions.json if present
+        const permResult = validateSkillPermissions(workspaceRoot, args.skillSlug);
+        // Merge errors (skip "does not exist" warnings — permissions.json is optional)
+        result.errors.push(...permResult.errors);
+        for (const w of permResult.warnings) {
+          if (!w.message.includes('does not exist')) {
+            result.warnings.push(w);
+          }
+        }
+        if (permResult.errors.length > 0) {
+          result.valid = false;
+        }
+
         const formatted = formatValidationResult(result);
 
         return {

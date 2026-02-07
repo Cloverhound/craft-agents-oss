@@ -43,6 +43,7 @@ Skills are stored as folders:
 ```
 ~/.craft-agent/workspaces/{workspaceId}/skills/{slug}/
 ├── SKILL.md          # Required: Skill definition (same format as Claude Code SDK)
+├── permissions.json  # Optional: Explore mode permissions (activated on invocation)
 ├── icon.svg          # Recommended: Skill icon for UI display
 ├── icon.png          # Alternative: PNG icon
 └── (other files)     # Optional: Additional resources
@@ -263,6 +264,27 @@ This is useful for:
 - Adding team-specific commit message formats
 - Enforcing project-specific coding standards
 - Customizing review criteria for your codebase
+
+## Skill Permissions
+
+Skills can include a `permissions.json` file to extend Explore mode rules when the skill is invoked. This uses the same schema as source/workspace permissions (see `~/.craft-agent/docs/permissions.md`).
+
+**Key behavior:**
+- Permissions only activate after the skill is invoked (lazy loading)
+- Same schema as source/workspace `permissions.json`
+- Common use case: allowing a skill's CLI binary to run read-only commands in Explore mode
+
+**Example** — `skills/xero/permissions.json`:
+```json
+{
+  "allowedBashPatterns": [
+    {
+      "pattern": "^~/.craft-agent/workspaces/.*/skills/xero/bin/xero\\s+(tenants|use|contacts?|invoices?|bills?|payments|help)(\\s|$)",
+      "comment": "Xero CLI — read-only commands only"
+    }
+  ]
+}
+```
 
 ## Best Practices
 
