@@ -1301,9 +1301,44 @@ export class SessionManager {
         )
       }
 
-      // Update source config to mark as authenticated
-      const { markSourceAuthenticated } = await import('@craft-agent/shared/sources')
-      markSourceAuthenticated(managed.workspace.rootPath, request.sourceSlug)
+      // Update credential config — auto-test if testRequest is configured
+      const credSlug = request.sourceSlug.replace(/^cred_/, '')
+      const { loadCredentialConfig, saveCredentialConfig } = await import('@craft-agent/shared/credentials/registry')
+      const credConfig = loadCredentialConfig(managed.workspace.rootPath, credSlug)
+      if (credConfig) {
+        if (credConfig.testRequest) {
+          // Build auth headers from the just-entered credentials and test
+          try {
+            const authHeaders: Record<string, string> = {}
+            if (request.mode === 'bearer') {
+              const scheme = (credConfig.auth as any).scheme || 'Bearer'
+              authHeaders['Authorization'] = `${scheme} ${response.value}`
+            } else if (request.mode === 'basic') {
+              const basicAuth = Buffer.from(`${response.username}:${response.password}`).toString('base64')
+              authHeaders['Authorization'] = `Basic ${basicAuth}`
+            } else if (request.mode === 'multi-header') {
+              Object.assign(authHeaders, response.headers)
+            } else if (request.mode === 'header') {
+              const headerName = (credConfig.auth as any).headerName || 'X-API-Key'
+              authHeaders[headerName] = response.value!
+            }
+
+            const testResponse = await fetch(credConfig.testRequest.url, {
+              method: credConfig.testRequest.method || 'GET',
+              headers: authHeaders,
+            })
+            credConfig.isAuthenticated = testResponse.ok
+            credConfig.lastTestedAt = Date.now()
+          } catch {
+            credConfig.isAuthenticated = false
+            credConfig.lastTestedAt = Date.now()
+          }
+        } else {
+          // No test endpoint — mark as authenticated (best we can do)
+          credConfig.isAuthenticated = true
+        }
+        saveCredentialConfig(managed.workspace.rootPath, credConfig)
+      }
 
       // Mark source as unseen so fresh guide is injected on next message
       if (managed.agent) {
