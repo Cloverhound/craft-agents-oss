@@ -26,7 +26,7 @@ import {
 import { useMenuComponents } from '@/components/ui/menu-context'
 import { getDocUrl, type DocFeature } from '@craft-agent/shared/docs/doc-links'
 
-export type SidebarMenuType = 'allChats' | 'flagged' | 'status' | 'sources' | 'credentials' | 'skills' | 'labels' | 'views' | 'newChat'
+export type SidebarMenuType = 'allChats' | 'flagged' | 'status' | 'sources' | 'credentials' | 'skills' | 'labels' | 'views' | 'queue' | 'newChat'
 
 export interface SidebarMenuProps {
   /** Type of sidebar item (determines available menu items) */
@@ -192,6 +192,16 @@ export function SidebarMenu({
       <MenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('credentials'))}>
         <ExternalLink className="h-3.5 w-3.5" />
         <span className="flex-1">Learn More about Credentials</span>
+      </MenuItem>
+    )
+  }
+
+  // Queue: show "Learn More" (queue is agent-managed, no manual add)
+  if (type === 'queue') {
+    return (
+      <MenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('queue' as DocFeature))}>
+        <ExternalLink className="h-3.5 w-3.5" />
+        <span className="flex-1">Learn More about Queue</span>
       </MenuItem>
     )
   }

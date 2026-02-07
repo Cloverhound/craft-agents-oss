@@ -356,6 +356,31 @@ const api: ElectronAPI = {
     }
   },
 
+  // Queue management
+  listQueueTasks: (workspaceId: string, filter?: any) =>
+    ipcRenderer.invoke(IPC_CHANNELS.QUEUE_LIST_TASKS, workspaceId, filter),
+  getQueueTask: (workspaceId: string, taskId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.QUEUE_GET_TASK, workspaceId, taskId),
+  updateQueueTask: (workspaceId: string, taskId: string, updates: any) =>
+    ipcRenderer.invoke(IPC_CHANNELS.QUEUE_UPDATE_TASK, workspaceId, taskId, updates),
+  deleteQueueTask: (workspaceId: string, taskId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.QUEUE_DELETE_TASK, workspaceId, taskId),
+  listQueueTypes: (workspaceId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.QUEUE_LIST_TYPES, workspaceId),
+  getQueueType: (workspaceId: string, typeSlug: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.QUEUE_GET_TYPE, workspaceId, typeSlug),
+  getQueueStats: (workspaceId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.QUEUE_GET_STATS, workspaceId),
+  onQueueChanged: (callback: (workspaceId: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, workspaceId: string) => {
+      callback(workspaceId)
+    }
+    ipcRenderer.on(IPC_CHANNELS.QUEUE_CHANGED, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.QUEUE_CHANGED, handler)
+    }
+  },
+
   // Views (dynamic, expression-based filters stored in views.json)
   listViews: (workspaceId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.VIEWS_LIST, workspaceId),

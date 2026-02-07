@@ -2234,6 +2234,76 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     return result
   })
 
+  // ============================================================
+  // Queue Management (Workspace-scoped)
+  // ============================================================
+
+  // List queue tasks with optional filter
+  ipcMain.handle(IPC_CHANNELS.QUEUE_LIST_TASKS, async (_event, workspaceId: string, filter?: any) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { listTasks } = await import('@craft-agent/shared/queue')
+    return listTasks(workspace.rootPath, filter)
+  })
+
+  // Get a single queue task by ID
+  ipcMain.handle(IPC_CHANNELS.QUEUE_GET_TASK, async (_event, workspaceId: string, taskId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { loadTask } = await import('@craft-agent/shared/queue')
+    return loadTask(workspace.rootPath, taskId)
+  })
+
+  // Update a queue task (state transitions, field edits from UI)
+  ipcMain.handle(IPC_CHANNELS.QUEUE_UPDATE_TASK, async (_event, workspaceId: string, taskId: string, updates: any) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { updateTask } = await import('@craft-agent/shared/queue')
+    const task = updateTask(workspace.rootPath, taskId, updates)
+    windowManager.broadcastToAll(IPC_CHANNELS.QUEUE_CHANGED, workspaceId)
+    return task
+  })
+
+  // Delete a queue task
+  ipcMain.handle(IPC_CHANNELS.QUEUE_DELETE_TASK, async (_event, workspaceId: string, taskId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { deleteTask } = await import('@craft-agent/shared/queue')
+    deleteTask(workspace.rootPath, taskId)
+    windowManager.broadcastToAll(IPC_CHANNELS.QUEUE_CHANGED, workspaceId)
+  })
+
+  // List all queue task types
+  ipcMain.handle(IPC_CHANNELS.QUEUE_LIST_TYPES, async (_event, workspaceId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { listTaskTypes } = await import('@craft-agent/shared/queue')
+    return listTaskTypes(workspace.rootPath)
+  })
+
+  // Get a single queue task type by slug
+  ipcMain.handle(IPC_CHANNELS.QUEUE_GET_TYPE, async (_event, workspaceId: string, typeSlug: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { loadTaskType } = await import('@craft-agent/shared/queue')
+    return loadTaskType(workspace.rootPath, typeSlug)
+  })
+
+  // Get queue statistics
+  ipcMain.handle(IPC_CHANNELS.QUEUE_GET_STATS, async (_event, workspaceId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { getQueueStats } = await import('@craft-agent/shared/queue')
+    return getQueueStats(workspace.rootPath)
+  })
+
   // List views for a workspace (dynamic expression-based filters stored in views.json)
   ipcMain.handle(IPC_CHANNELS.VIEWS_LIST, async (_event, workspaceId: string) => {
     const workspace = getWorkspaceByNameOrId(workspaceId)

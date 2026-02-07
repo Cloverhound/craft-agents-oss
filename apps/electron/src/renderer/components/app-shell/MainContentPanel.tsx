@@ -24,10 +24,13 @@ import {
   isSettingsNavigation,
   isSkillsNavigation,
   isCredentialsNavigation,
+  isQueueNavigation,
 } from '@/contexts/NavigationContext'
 import { AppSettingsPage, AppearanceSettingsPage, InputSettingsPage, WorkspaceSettingsPage, PermissionsSettingsPage, LabelsSettingsPage, PreferencesPage, ShortcutsPage, SourceInfoPage, ChatPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
 import CredentialInfoPage from '@/pages/CredentialInfoPage'
+import QueueTaskDetailPage from '@/pages/QueueTaskDetailPage'
+import QueueTypeDetailPage from '@/pages/QueueTypeDetailPage'
 
 export interface MainContentPanelProps {
   /** Whether the app is in focused mode (single chat, no sidebar) */
@@ -166,6 +169,38 @@ export function MainContentPanel({
       <Panel variant="grow" className={className}>
         <div className="flex items-center justify-center h-full text-muted-foreground">
           <p className="text-sm">No credentials configured</p>
+        </div>
+      </Panel>
+    )
+  }
+
+  // Queue navigator - show task detail, type detail, or empty state
+  if (isQueueNavigation(navState)) {
+    if (navState.details?.type === 'task') {
+      return wrapWithStoplight(
+        <Panel variant="grow" className={className}>
+          <QueueTaskDetailPage
+            taskId={navState.details.taskId}
+            workspaceId={activeWorkspaceId || ''}
+          />
+        </Panel>
+      )
+    }
+    if (navState.details?.type === 'type') {
+      return wrapWithStoplight(
+        <Panel variant="grow" className={className}>
+          <QueueTypeDetailPage
+            typeSlug={navState.details.typeSlug}
+            workspaceId={activeWorkspaceId || ''}
+          />
+        </Panel>
+      )
+    }
+    // No selection - empty state
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <div className="flex items-center justify-center h-full text-muted-foreground">
+          <p className="text-sm">No queue tasks yet</p>
         </div>
       </Panel>
     )

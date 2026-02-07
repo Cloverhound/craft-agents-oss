@@ -22,6 +22,7 @@ import { expandPath, toPortablePath } from '../utils/paths.ts';
 import { atomicWriteFileSync } from '../utils/files.ts';
 import { getDefaultStatusConfig, saveStatusConfig, ensureDefaultIconFiles } from '../statuses/storage.ts';
 import { getDefaultLabelConfig, saveLabelConfig } from '../labels/storage.ts';
+import { getDefaultQueueConfig, saveQueueConfig, ensureQueueDirs } from '../queue/storage.ts';
 import { loadConfigDefaults } from '../config/storage.ts';
 import { DEFAULT_MODEL } from '../config/models.ts';
 import type {
@@ -85,6 +86,14 @@ export function getWorkspaceSessionsPath(rootPath: string): string {
  */
 export function getWorkspaceSkillsPath(rootPath: string): string {
   return join(rootPath, 'skills');
+}
+
+/**
+ * Get path to workspace queue directory
+ * @param rootPath - Absolute path to workspace root folder
+ */
+export function getWorkspaceQueuePath(rootPath: string): string {
+  return join(rootPath, 'queue');
 }
 
 // ============================================================
@@ -185,6 +194,9 @@ export function loadWorkspace(rootPath: string): LoadedWorkspace | null {
   if (!existsSync(skillsPath)) {
     mkdirSync(skillsPath, { recursive: true });
   }
+
+  // Ensure queue directory exists (migration for existing workspaces)
+  ensureQueueDirs(rootPath);
 
   return {
     config,
@@ -312,6 +324,10 @@ export function createWorkspaceAtPath(
 
   // Initialize label configuration with defaults (two nested groups + valued labels)
   saveLabelConfig(rootPath, getDefaultLabelConfig());
+
+  // Initialize queue directory structure and configuration
+  ensureQueueDirs(rootPath);
+  saveQueueConfig(rootPath, getDefaultQueueConfig());
 
   // Initialize plugin manifest for SDK integration (enables skills, commands, agents)
   ensurePluginManifest(rootPath, name);

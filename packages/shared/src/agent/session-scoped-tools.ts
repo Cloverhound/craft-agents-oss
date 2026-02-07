@@ -17,6 +17,16 @@
  * - credential_oauth: Initiate OAuth 2.0 + PKCE browser flow for credentials
  * - credential_test: Verify credential works via test request
  * - credential_list: List all credentials with status
+ * - queue_push: Create a task in the work queue
+ * - queue_bulk_push: Create multiple tasks in one call
+ * - queue_update: Update task state, data, priority, or labels
+ * - queue_get: Get a specific task by ID
+ * - queue_list: List/query tasks with filters
+ * - queue_stats: Get summary counts by type and state
+ * - queue_delete: Delete a task
+ * - queue_type_create: Create a new task type
+ * - queue_type_list: List available task types
+ * - queue_type_get: Get task type definition
  *
  * Source and Skill CRUD is done via standard file editing tools (Read/Write/Edit).
  * See ~/.craft-agent/docs/ for config format documentation.
@@ -75,6 +85,18 @@ import {
   createCredentialTestTool,
   createCredentialListTool,
 } from '../credentials/credential-tools.ts';
+import {
+  createQueuePushTool,
+  createQueueBulkPushTool,
+  createQueueUpdateTool,
+  createQueueGetTool,
+  createQueueListTool,
+  createQueueStatsTool,
+  createQueueDeleteTool,
+  createQueueTypeCreateTool,
+  createQueueTypeListTool,
+  createQueueTypeGetTool,
+} from '../queue/queue-tools.ts';
 
 // ============================================================
 // Session-Scoped Tool Callbacks
@@ -434,6 +456,7 @@ Returns structured validation results with errors, warnings, and suggestions.
 - \`preferences\`: Validates ~/.craft-agent/preferences.json (user preferences)
 - \`permissions\`: Validates permissions.json files (workspace, source, skill, and app-level default)
 - \`tool-icons\`: Validates ~/.craft-agent/tool-icons/tool-icons.json (CLI tool icon mappings)
+- \`queue\`: Validates work queue configuration, task types, and tasks
 - \`all\`: Validates all configuration files
 
 **For specific source validation:** Use target='sources' with sourceSlug parameter.
@@ -446,7 +469,7 @@ Returns structured validation results with errors, warnings, and suggestions.
 3. If errors found, fix them and re-validate
 4. Once valid, changes take effect on next reload`,
     {
-      target: z.enum(['config', 'sources', 'statuses', 'preferences', 'permissions', 'tool-icons', 'all']).describe(
+      target: z.enum(['config', 'sources', 'statuses', 'preferences', 'permissions', 'tool-icons', 'queue', 'all']).describe(
         'Which config file(s) to validate'
       ),
       sourceSlug: z.string().optional().describe(
@@ -491,6 +514,26 @@ Returns structured validation results with errors, warnings, and suggestions.
           case 'tool-icons':
             result = validateToolIcons();
             break;
+          case 'queue': {
+            const { validateQueue } = await import('../queue/validation.ts');
+            const queueResult = validateQueue(workspaceRootPath);
+            result = {
+              valid: queueResult.valid,
+              errors: queueResult.errors.map(e => ({
+                file: 'queue/',
+                path: '',
+                message: e,
+                severity: 'error' as const,
+              })),
+              warnings: queueResult.warnings.map(w => ({
+                file: 'queue/',
+                path: '',
+                message: w,
+                severity: 'warning' as const,
+              })),
+            };
+            break;
+          }
           case 'all':
             result = validateAll(workspaceRootPath);
             break;
@@ -2207,6 +2250,17 @@ export function getSessionScopedTools(sessionId: string, workspaceRootPath: stri
         createCredentialListTool(sessionId, workspaceRootPath),
         // LLM tool - invoke secondary Claude calls for subtasks
         createLLMTool({ sessionId }),
+        // Queue tools: task management
+        createQueuePushTool(sessionId, workspaceRootPath),
+        createQueueBulkPushTool(sessionId, workspaceRootPath),
+        createQueueUpdateTool(sessionId, workspaceRootPath),
+        createQueueGetTool(sessionId, workspaceRootPath),
+        createQueueListTool(sessionId, workspaceRootPath),
+        createQueueStatsTool(sessionId, workspaceRootPath),
+        createQueueDeleteTool(sessionId, workspaceRootPath),
+        createQueueTypeCreateTool(sessionId, workspaceRootPath),
+        createQueueTypeListTool(sessionId, workspaceRootPath),
+        createQueueTypeGetTool(sessionId, workspaceRootPath),
       ],
     });
     sessionScopedToolsCache.set(cacheKey, cached);

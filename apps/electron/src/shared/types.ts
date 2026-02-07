@@ -690,6 +690,16 @@ export const IPC_CHANNELS = {
   LABELS_DELETE: 'labels:delete',
   LABELS_CHANGED: 'labels:changed',  // Broadcast event
 
+  // Queue management (workspace-scoped)
+  QUEUE_LIST_TASKS: 'queue:listTasks',
+  QUEUE_GET_TASK: 'queue:getTask',
+  QUEUE_UPDATE_TASK: 'queue:updateTask',
+  QUEUE_DELETE_TASK: 'queue:deleteTask',
+  QUEUE_LIST_TYPES: 'queue:listTypes',
+  QUEUE_GET_TYPE: 'queue:getType',
+  QUEUE_GET_STATS: 'queue:getStats',
+  QUEUE_CHANGED: 'queue:changed',  // Broadcast event (main → renderer)
+
   // Views management (workspace-scoped, stored in views.json)
   VIEWS_LIST: 'views:list',
   VIEWS_SAVE: 'views:save',
@@ -984,6 +994,17 @@ export interface ElectronAPI {
   // Labels change listener (live updates when labels config changes)
   onLabelsChanged(callback: (workspaceId: string) => void): () => void
 
+  // Queue (workspace-scoped)
+  listQueueTasks(workspaceId: string, filter?: import('@craft-agent/shared/queue').QueueTaskFilter): Promise<import('@craft-agent/shared/queue').QueueTask[]>
+  getQueueTask(workspaceId: string, taskId: string): Promise<import('@craft-agent/shared/queue').QueueTask | null>
+  updateQueueTask(workspaceId: string, taskId: string, updates: import('@craft-agent/shared/queue').UpdateTaskInput): Promise<import('@craft-agent/shared/queue').QueueTask>
+  deleteQueueTask(workspaceId: string, taskId: string): Promise<void>
+  listQueueTypes(workspaceId: string): Promise<import('@craft-agent/shared/queue').TaskTypeConfig[]>
+  getQueueType(workspaceId: string, typeSlug: string): Promise<import('@craft-agent/shared/queue').TaskTypeConfig | null>
+  getQueueStats(workspaceId: string): Promise<import('@craft-agent/shared/queue').QueueStats>
+  // Queue change listener (live updates when queue files change)
+  onQueueChanged(callback: (workspaceId: string) => void): () => void
+
   // Views (workspace-scoped, stored in views.json)
   listViews(workspaceId: string): Promise<import('@craft-agent/shared/views').ViewConfig[]>
   saveViews(workspaceId: string, views: import('@craft-agent/shared/views').ViewConfig[]): Promise<void>
@@ -1240,6 +1261,19 @@ export interface CredentialsNavigationState {
 }
 
 /**
+ * Queue navigation state - shows QueueList in navigator
+ */
+export interface QueueNavigationState {
+  navigator: 'queue'
+  /** Optional type filter (show tasks of a specific type only) */
+  typeFilter?: string
+  /** Selected queue details, or null for empty state */
+  details: { type: 'task'; taskId: string } | { type: 'type'; typeSlug: string } | null
+  /** Optional right sidebar panel state */
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Unified navigation state - single source of truth for all 3 panels
  *
  * From this state we can derive:
@@ -1253,6 +1287,7 @@ export type NavigationState =
   | SettingsNavigationState
   | SkillsNavigationState
   | CredentialsNavigationState
+  | QueueNavigationState
 
 /**
  * Type guard to check if state is chats navigation
@@ -1290,6 +1325,13 @@ export const isCredentialsNavigation = (
 ): state is CredentialsNavigationState => state.navigator === 'credentials'
 
 /**
+ * Type guard to check if state is queue navigation
+ */
+export const isQueueNavigation = (
+  state: NavigationState
+): state is QueueNavigationState => state.navigator === 'queue'
+
+/**
  * Default navigation state - allChats with no selection
  */
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
@@ -1319,6 +1361,15 @@ export const getNavigationStateKey = (state: NavigationState): string => {
       return `credentials/credential/${state.details.credentialSlug}`
     }
     return 'credentials'
+  }
+  if (state.navigator === 'queue') {
+    if (state.details?.type === 'task') {
+      return `queue/task/${state.details.taskId}`
+    }
+    if (state.details?.type === 'type') {
+      return `queue/type/${state.details.typeSlug}`
+    }
+    return 'queue'
   }
   if (state.navigator === 'settings') {
     return `settings:${state.subpage}`
@@ -1369,6 +1420,23 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
       return { navigator: 'credentials', details: { type: 'credential', credentialSlug } }
     }
     return { navigator: 'credentials', details: null }
+  }
+
+  // Handle queue
+  if (key === 'queue') return { navigator: 'queue', details: null }
+  if (key.startsWith('queue/task/')) {
+    const taskId = key.slice(11)
+    if (taskId) {
+      return { navigator: 'queue', details: { type: 'task', taskId } }
+    }
+    return { navigator: 'queue', details: null }
+  }
+  if (key.startsWith('queue/type/')) {
+    const typeSlug = key.slice(11)
+    if (typeSlug) {
+      return { navigator: 'queue', details: { type: 'type', typeSlug } }
+    }
+    return { navigator: 'queue', details: null }
   }
 
   // Handle settings

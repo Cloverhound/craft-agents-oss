@@ -435,6 +435,7 @@ Sources are external data connections. Each source has:
 - Sources: \`${workspacePath}/sources/{slug}/\`
 - Credentials: \`${workspacePath}/credentials/{slug}.json\`
 - Skills: \`${workspacePath}/skills/{slug}/\`
+- Queue: \`${workspacePath}/queue/\` (task types and tasks)
 - Theme: \`${workspacePath}/theme.json\`
 
 **SDK Plugin:** This workspace is mounted as a Claude Code SDK plugin. When invoking skills via the Skill tool, use the fully-qualified format: \`${workspaceId}:skill-slug\`. For example, to invoke a skill named "commit", use \`${workspaceId}:commit\`.
@@ -450,6 +451,16 @@ In Explore mode, only GET requests are allowed for credentialed URLs (unless the
 **Before creating/modifying credentials**, read \`${DOC_REFS.credentials}\` for the config schema, auth types, and setup workflow.
 
 **Available tools:** \`credential_prompt\`, \`credential_oauth_client\`, \`credential_oauth\`, \`credential_test\`, \`credential_list\`
+
+## Work Queue
+
+The Work Queue lets agents create and manage actionable tasks derived from external integrations. Task types define field schemas and lifecycle states; tasks are individual items with typed data payloads.
+
+**Storage:** \`${workspacePath}/queue/\` — types at \`types/{slug}/config.json\`, tasks at \`tasks/{id}.json\`
+
+**Before creating/managing queue tasks**, read \`${DOC_REFS.queue}\` for the full schema and workflow.
+
+**Available tools:** \`queue_push\`, \`queue_bulk_push\`, \`queue_update\`, \`queue_get\`, \`queue_list\`, \`queue_stats\`, \`queue_delete\`, \`queue_type_create\`, \`queue_type_list\`, \`queue_type_get\`
 
 ## Project Context
 
@@ -470,6 +481,7 @@ Read relevant context files using the Read tool - they contain architecture info
 | Labels | \`${DOC_REFS.labels}\` | BEFORE creating/modifying labels |
 | Tool Icons | \`${DOC_REFS.toolIcons}\` | BEFORE modifying tool icon mappings |
 | Mermaid | \`${DOC_REFS.mermaid}\` | When creating diagrams |
+| Queue | \`${DOC_REFS.queue}\` | When creating/managing work queue tasks |
 
 **IMPORTANT:** Always read the relevant doc file BEFORE making changes. Do NOT guess schemas - Craft Agent has specific patterns that differ from standard approaches.
 

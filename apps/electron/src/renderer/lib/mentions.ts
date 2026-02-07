@@ -34,6 +34,8 @@ export interface ParsedMentions {
   files: string[]
   /** Folder paths mentioned via [folder:path] */
   folders: string[]
+  /** Task references mentioned via [task:type-slug:task-id] */
+  tasks: { typeSlug: string; taskId: string }[]
 }
 
 export interface MentionMatch {
@@ -71,6 +73,7 @@ export function parseMentions(
     sources: [],
     files: [],
     folders: [],
+    tasks: [],
   }
 
   // Match source mentions: [source:slug]
@@ -108,6 +111,16 @@ export function parseMentions(
     const folderPath = match[1]
     if (!result.folders.includes(folderPath)) {
       result.folders.push(folderPath)
+    }
+  }
+
+  // Match task mentions: [task:type-slug:task-id]
+  const taskPattern = /\[task:([\w-]+):([\w-]+)\]/g
+  while ((match = taskPattern.exec(text)) !== null) {
+    const typeSlug = match[1]
+    const taskId = match[2]
+    if (!result.tasks.some(t => t.taskId === taskId)) {
+      result.tasks.push({ typeSlug, taskId })
     }
   }
 
@@ -181,6 +194,17 @@ export function findMentionMatches(
     })
   }
 
+  // Match task mentions: [task:type-slug:task-id]
+  const taskPattern = /(\[task:([\w-]+):([\w-]+)\])/g
+  while ((match = taskPattern.exec(text)) !== null) {
+    matches.push({
+      type: 'task',
+      id: match[3], // task ID
+      fullMatch: match[1],
+      startIndex: match.index,
+    })
+  }
+
   // Sort by position
   return matches.sort((a, b) => a.startIndex - b.startIndex)
 }
@@ -205,6 +229,10 @@ export function removeMention(text: string, type: MentionItemType, id: string): 
       break
     case 'folder':
       pattern = new RegExp(`\\[folder:${escapeRegExp(id)}\\]`, 'g')
+      break
+    case 'task':
+      // Match [task:any-type-slug:taskId]
+      pattern = new RegExp(`\\[task:[\\w-]+:${escapeRegExp(id)}\\]`, 'g')
       break
     case 'skill':
     default:
@@ -235,6 +263,8 @@ export function stripAllMentions(text: string): string {
     .replace(/\[file:[^\]]+\]/g, '')
     // Remove [folder:path]
     .replace(/\[folder:[^\]]+\]/g, '')
+    // Remove [task:type-slug:task-id]
+    .replace(/\[task:[\w-]+:[\w-]+\]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -248,7 +278,7 @@ export function hasMentions(
   availableSourceSlugs: string[]
 ): boolean {
   const mentions = parseMentions(text, availableSkillSlugs, availableSourceSlugs)
-  return mentions.skills.length > 0 || mentions.sources.length > 0 || mentions.files.length > 0 || mentions.folders.length > 0
+  return mentions.skills.length > 0 || mentions.sources.length > 0 || mentions.files.length > 0 || mentions.folders.length > 0 || mentions.tasks.length > 0
 }
 
 // ============================================================================
@@ -324,6 +354,9 @@ export function extractBadges(
       // Show folder name as label, full relative path stored for tooltip
       label = match.id.split('/').pop() || match.id
       filePath = match.id
+    } else if (match.type === 'task') {
+      // Show task ID as label
+      label = match.id
     }
 
     // For skills, create fully-qualified rawText (workspaceId:slug) so the agent
@@ -335,7 +368,7 @@ export function extractBadges(
     }
 
     return {
-      type: match.type as 'source' | 'skill' | 'file' | 'folder',
+      type: match.type as 'source' | 'skill' | 'file' | 'folder' | 'task',
       label,
       rawText,
       iconDataUrl,

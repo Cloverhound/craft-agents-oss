@@ -25,6 +25,7 @@ import {
   FolderOpen,
   HelpCircle,
   ExternalLink,
+  ListTodo,
 } from "lucide-react"
 import { PanelRightRounded } from "../icons/PanelRightRounded"
 import { PanelLeftRounded } from "../icons/PanelLeftRounded"
@@ -88,6 +89,7 @@ import { type TodoStateId, type TodoState, statusConfigsToTodoStates } from "@/c
 import { useStatuses } from "@/hooks/useStatuses"
 import { useLabels } from "@/hooks/useLabels"
 import { useViews } from "@/hooks/useViews"
+import { useQueue } from "@/hooks/useQueue"
 import { LabelIcon, LabelValueTypeIcon } from "@/components/ui/label-icon"
 import { filterItems as filterLabelMenuItems, filterStates as filterLabelMenuStates, type LabelMenuItem } from "@/components/ui/label-menu"
 import { buildLabelTree, getDescendantIds, getLabelDisplayName, flattenLabels, extractLabelId, findLabelById } from "@craft-agent/shared/labels"
@@ -104,6 +106,7 @@ import {
   isSettingsNavigation,
   isSkillsNavigation,
   isCredentialsNavigation,
+  isQueueNavigation,
   type NavigationState,
   type ChatFilter,
 } from "@/contexts/NavigationContext"
@@ -111,6 +114,7 @@ import type { SettingsSubpage } from "../../../shared/types"
 import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
 import { CredentialsListPanel } from "./CredentialsListPanel"
+import { QueueListPanel } from "./QueueListPanel"
 import { PanelHeader } from "./PanelHeader"
 import { EditPopover, getEditConfig, type EditContextKey } from "@/components/ui/EditPopover"
 import { getDocUrl } from "@craft-agent/shared/docs/doc-links"
@@ -915,6 +919,13 @@ function AppShellContent({
   // Views: compiled once on config load, evaluated per session in list/chat
   const { evaluateSession: evaluateViews, viewConfigs } = useViews(activeWorkspace?.id || null)
 
+  // Queue: load tasks, types, and stats
+  const queueTypeFilter = isQueueNavigation(navState) ? navState.typeFilter : undefined
+  const { tasks: queueTasks, types: queueTypes, stats: queueStats, deleteTask: handleDeleteQueueTask } = useQueue(
+    activeWorkspace?.id || null,
+    queueTypeFilter ? { typeSlug: queueTypeFilter } : undefined
+  )
+
   // Build hierarchical label tree from nested config structure
   const labelTree = useMemo(() => buildLabelTree(labelConfigs), [labelConfigs])
 
@@ -1557,6 +1568,21 @@ function AppShellContent({
     navigate(routes.view.credentials())
   }, [])
 
+  // Handler for queue view
+  const handleQueueClick = useCallback(() => {
+    navigate(routes.view.queue())
+  }, [])
+
+  // Handler for queue type filter
+  const handleQueueTypeClick = useCallback((typeSlug: string) => {
+    navigate(routes.view.queue({ typeSlug }))
+  }, [])
+
+  // Handler for queue task selection
+  const handleQueueTaskSelect = useCallback((task: import('@craft-agent/shared/queue').QueueTask) => {
+    navigate(routes.view.queue({ taskId: task.id }))
+  }, [])
+
   // Handler for settings view
   const handleSettingsClick = useCallback((subpage: SettingsSubpage = 'app') => {
     navigate(routes.view.settings(subpage))
@@ -1770,14 +1796,22 @@ function AppShellContent({
     }
     flattenTree(labelTree)
 
-    // 3. Sources, Credentials, Skills, Settings
+    // 3. Queue (if types exist)
+    if (queueTypes.length > 0) {
+      result.push({ id: 'nav:queue', type: 'nav', action: handleQueueClick })
+      for (const qt of queueTypes) {
+        result.push({ id: `nav:queue:type:${qt.slug}`, type: 'nav', action: () => handleQueueTypeClick(qt.slug) })
+      }
+    }
+
+    // 4. Sources, Credentials, Skills, Settings
     result.push({ id: 'nav:sources', type: 'nav', action: handleSourcesClick })
     result.push({ id: 'nav:credentials', type: 'nav', action: handleCredentialsClick })
     result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick('app') })
 
     return result
-  }, [handleAllChatsClick, handleFlaggedClick, handleTodoStateClick, effectiveTodoStates, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleSettingsClick])
+  }, [handleAllChatsClick, handleFlaggedClick, handleTodoStateClick, effectiveTodoStates, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleSettingsClick, handleQueueClick, handleQueueTypeClick, queueTypes])
 
   // Toggle folder expanded state
   const handleToggleFolder = React.useCallback((path: string) => {
@@ -1899,6 +1933,15 @@ function AppShellContent({
     // Credentials navigator
     if (isCredentialsNavigation(navState)) {
       return 'All Credentials'
+    }
+
+    // Queue navigator
+    if (isQueueNavigation(navState)) {
+      if (navState.typeFilter) {
+        const qt = queueTypes.find(t => t.slug === navState.typeFilter)
+        return qt ? `${qt.icon ? qt.icon + ' ' : ''}${qt.name}` : 'Queue'
+      }
+      return 'Queue'
     }
 
     // Settings navigator
@@ -2154,6 +2197,32 @@ function AppShellContent({
                       },
                       items: buildLabelSidebarItems(labelTree),
                     },
+                    // Queue: expandable section with type sub-items
+                    ...(queueTypes.length > 0 ? [{
+                      id: "nav:queue",
+                      title: "Queue",
+                      label: String(queueStats?.byCategory.open || 0),
+                      icon: ListTodo,
+                      variant: (isQueueNavigation(navState) && !navState.typeFilter && !navState.details) ? "default" as const : "ghost" as const,
+                      onClick: handleQueueClick,
+                      expandable: true,
+                      expanded: isExpanded('nav:queue'),
+                      onToggle: () => toggleExpanded('nav:queue'),
+                      contextMenu: {
+                        type: 'queue' as const,
+                      },
+                      items: queueTypes.map(qt => ({
+                        id: `nav:queue:type:${qt.slug}`,
+                        title: `${qt.icon ? qt.icon + ' ' : ''}${qt.name}`,
+                        label: String(queueStats?.byType[qt.slug]?.open || 0),
+                        icon: ListTodo,
+                        variant: (isQueueNavigation(navState) && navState.typeFilter === qt.slug ? "default" : "ghost") as "default" | "ghost",
+                        onClick: () => handleQueueTypeClick(qt.slug),
+                        contextMenu: {
+                          type: 'queue' as const,
+                        },
+                      })),
+                    }] : []),
                     // --- Separator ---
                     { id: "separator:chats-sources", type: "separator" },
                     // --- Sources & Skills Section ---
@@ -2964,6 +3033,18 @@ function AppShellContent({
                 onCredentialClick={handleCredentialSelect}
                 onDeleteCredential={handleDeleteCredential}
                 selectedCredentialSlug={isCredentialsNavigation(navState) && navState.details?.type === 'credential' ? navState.details.credentialSlug : null}
+              />
+            )}
+            {isQueueNavigation(navState) && activeWorkspaceId && (
+              /* Queue List */
+              <QueueListPanel
+                tasks={queueTasks}
+                types={queueTypes}
+                stats={queueStats}
+                typeFilter={navState.typeFilter}
+                onTaskClick={handleQueueTaskSelect}
+                onDeleteTask={handleDeleteQueueTask}
+                selectedTaskId={isQueueNavigation(navState) && navState.details?.type === 'task' ? navState.details.taskId : null}
               />
             )}
             {isSettingsNavigation(navState) && (
