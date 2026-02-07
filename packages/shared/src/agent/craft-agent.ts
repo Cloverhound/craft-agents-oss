@@ -373,6 +373,8 @@ export class CraftAgent {
   private sourceApiServers: Record<string, ReturnType<typeof createSdkMcpServer>> = {};
   // Set of active source server names (for blocking disabled sources)
   private activeSourceServerNames: Set<string> = new Set();
+  // Set of skill slugs invoked this session (for skill-level permissions)
+  private activeSkillSlugs: Set<string> = new Set();
   // Set of intended active source slugs (what UI shows as active, may differ from activeSourceServerNames if build fails)
   private intendedActiveSlugs: Set<string> = new Set();
   // Full list of all sources in workspace (for context injection)
@@ -849,6 +851,7 @@ export class CraftAgent {
           const permissionsContext: PermissionsContext = {
             workspaceRootPath: this.workspaceRootPath,
             activeSourceSlugs: Array.from(this.activeSourceServerNames),
+            activeSkillSlugs: Array.from(this.activeSkillSlugs),
           };
 
           const plansFolderPath = sessionId ? getSessionPlansPath(this.workspaceRootPath, sessionId) : undefined;
@@ -1058,20 +1061,30 @@ export class CraftAgent {
 
           // ============================================================
           // SKILL QUALIFICATION: Ensure skill names are fully-qualified
+          // Also track invoked skills for skill-level permissions
           // ============================================================
           if (input.tool_name === 'Skill') {
             const toolInput = input.tool_input as { skill?: string; args?: string };
-            if (toolInput.skill && !toolInput.skill.includes(':')) {
-              const workspaceId = this.config.workspace.id;
-              const qualifiedSkill = `${workspaceId}:${toolInput.skill}`;
-              this.onDebug?.(`Skill tool: qualified "${toolInput.skill}" → "${qualifiedSkill}"`);
-              return {
-                continue: true,
-                hookSpecificOutput: {
-                  hookEventName: 'PreToolUse' as const,
-                  updatedInput: { ...toolInput, skill: qualifiedSkill },
-                },
-              };
+            if (toolInput.skill) {
+              // Extract slug from qualified name (e.g., "my-workspace:xero" → "xero")
+              const skillSlug = toolInput.skill.includes(':')
+                ? toolInput.skill.split(':').pop()!
+                : toolInput.skill;
+              this.activeSkillSlugs.add(skillSlug);
+              this.onDebug?.(`Skill invoked, permissions activated: ${skillSlug}`);
+
+              if (!toolInput.skill.includes(':')) {
+                const workspaceId = this.config.workspace.id;
+                const qualifiedSkill = `${workspaceId}:${toolInput.skill}`;
+                this.onDebug?.(`Skill tool: qualified "${toolInput.skill}" → "${qualifiedSkill}"`);
+                return {
+                  continue: true,
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse' as const,
+                    updatedInput: { ...toolInput, skill: qualifiedSkill },
+                  },
+                };
+              }
             }
           }
 
@@ -1779,6 +1792,7 @@ export class CraftAgent {
               const permissionsContext: PermissionsContext = {
                 workspaceRootPath: this.workspaceRootPath,
                 activeSourceSlugs: Array.from(this.activeSourceServerNames),
+                activeSkillSlugs: Array.from(this.activeSkillSlugs),
               };
 
               // In 'allow-all' mode, still check for explicitly blocked tools
@@ -2020,23 +2034,33 @@ export class CraftAgent {
               // calls a skill with just the short slug, we prefix it here.
               // Phase 1 (UI layer) should already inject the full name in rawText, but this
               // provides defense-in-depth for edge cases where agent calls Skill directly.
+              // Also track invoked skills for skill-level permissions.
               // ============================================================
               if (input.tool_name === 'Skill') {
                 const toolInput = input.tool_input as { skill?: string; args?: string };
-                if (toolInput.skill && !toolInput.skill.includes(':')) {
-                  // Short name detected - prepend workspace slug (folder name)
-                  // SDK expects: "workspaceSlug:skillSlug" format, NOT UUID
-                  const pathParts = this.workspaceRootPath.split('/').filter(Boolean);
-                  const workspaceSlug = pathParts[pathParts.length - 1] || this.config.workspace.id;
-                  const qualifiedSkill = `${workspaceSlug}:${toolInput.skill}`;
-                  this.onDebug?.(`Skill tool: qualified "${toolInput.skill}" → "${qualifiedSkill}"`);
-                  return {
-                    continue: true,
-                    hookSpecificOutput: {
-                      hookEventName: 'PreToolUse' as const,
-                      updatedInput: { ...toolInput, skill: qualifiedSkill },
-                    },
-                  };
+                if (toolInput.skill) {
+                  // Extract slug from qualified name (e.g., "my-workspace:xero" → "xero")
+                  const skillSlug = toolInput.skill.includes(':')
+                    ? toolInput.skill.split(':').pop()!
+                    : toolInput.skill;
+                  this.activeSkillSlugs.add(skillSlug);
+                  this.onDebug?.(`Skill invoked, permissions activated: ${skillSlug}`);
+
+                  if (!toolInput.skill.includes(':')) {
+                    // Short name detected - prepend workspace slug (folder name)
+                    // SDK expects: "workspaceSlug:skillSlug" format, NOT UUID
+                    const pathParts = this.workspaceRootPath.split('/').filter(Boolean);
+                    const workspaceSlug = pathParts[pathParts.length - 1] || this.config.workspace.id;
+                    const qualifiedSkill = `${workspaceSlug}:${toolInput.skill}`;
+                    this.onDebug?.(`Skill tool: qualified "${toolInput.skill}" → "${qualifiedSkill}"`);
+                    return {
+                      continue: true,
+                      hookSpecificOutput: {
+                        hookEventName: 'PreToolUse' as const,
+                        updatedInput: { ...toolInput, skill: qualifiedSkill },
+                      },
+                    };
+                  }
                 }
               }
 

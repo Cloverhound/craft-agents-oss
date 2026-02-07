@@ -123,6 +123,8 @@ export interface ConfigWatcherCallbacks {
   onWorkspacePermissionsChange?: (workspaceId: string) => void;
   /** Called when a source's permissions.json changes */
   onSourcePermissionsChange?: (sourceSlug: string) => void;
+  /** Called when a skill's permissions.json changes */
+  onSkillPermissionsChange?: (skillSlug: string) => void;
 
   // Status callbacks
   /** Called when statuses config.json changes */
@@ -406,6 +408,8 @@ export class ConfigWatcher {
       // File-level changes
       if (file === 'SKILL.md') {
         this.debounce(`skill:${slug}`, () => this.handleSkillChange(slug));
+      } else if (file === 'permissions.json') {
+        this.debounce(`skill-permissions:${slug}`, () => this.handleSkillPermissionsChange(slug));
       } else if (file && /^icon\.(svg|png|jpg|jpeg)$/i.test(file)) {
         // Icon file changes also trigger a skill change (to update iconPath)
         this.debounce(`skill-icon:${slug}`, () => this.handleSkillChange(slug));
@@ -771,6 +775,19 @@ export class ConfigWatcher {
           debug('[ConfigWatcher] Icon download failed for skill:', slug, error);
         });
     }
+  }
+
+  /**
+   * Handle skill permissions.json change
+   */
+  private handleSkillPermissionsChange(slug: string): void {
+    debug('[ConfigWatcher] Skill permissions.json changed:', slug);
+
+    // Invalidate cache
+    permissionsConfigCache.invalidateSkill(this.workspaceDir, slug);
+
+    // Notify callback
+    this.callbacks.onSkillPermissionsChange?.(slug);
   }
 
   // ============================================================

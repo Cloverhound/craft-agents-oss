@@ -1239,6 +1239,7 @@ import {
   validatePermissionsConfig,
   getWorkspacePermissionsPath,
   getSourcePermissionsPath,
+  getSkillPermissionsPath,
   getAppPermissionsDir,
 } from '../agent/permissions-config.ts';
 
@@ -1354,6 +1355,16 @@ export function validateSourcePermissions(workspaceRoot: string, sourceSlug: str
 }
 
 /**
+ * Validate skill-level permissions.json
+ * @param workspaceRoot - Absolute path to workspace root folder
+ * @param skillSlug - Skill slug
+ */
+export function validateSkillPermissions(workspaceRoot: string, skillSlug: string): ValidationResult {
+  const permissionsPath = getSkillPermissionsPath(workspaceRoot, skillSlug);
+  return validatePermissionsFile(permissionsPath, `skills/${skillSlug}/permissions.json`);
+}
+
+/**
  * Validate app-level default permissions
  */
 export function validateDefaultPermissions(): ValidationResult {
@@ -1389,6 +1400,20 @@ export function validateAllPermissions(workspaceRoot: string): ValidationResult 
         const srcResult = validateSourcePermissions(workspaceRoot, entry);
         errors.push(...srcResult.errors);
         warnings.push(...srcResult.warnings);
+      }
+    }
+  }
+
+  // Validate all skill-level permissions
+  const skillsDir = join(workspaceRoot, 'skills');
+  if (existsSync(skillsDir)) {
+    const entries = readdirSync(skillsDir);
+    for (const entry of entries) {
+      const entryPath = join(skillsDir, entry);
+      if (statSync(entryPath).isDirectory()) {
+        const skillResult = validateSkillPermissions(workspaceRoot, entry);
+        errors.push(...skillResult.errors);
+        warnings.push(...skillResult.warnings);
       }
     }
   }

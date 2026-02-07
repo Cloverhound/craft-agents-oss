@@ -443,7 +443,7 @@ describe('SessionRunner', () => {
       }
 
       expect(messages).toHaveLength(3);
-      expect(messages[2].type).toBe('result');
+      expect(messages[2]!.type).toBe('result');
     });
   });
 });

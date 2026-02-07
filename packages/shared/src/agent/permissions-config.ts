@@ -178,6 +178,8 @@ export interface PermissionsContext {
   workspaceRootPath: string;
   /** Active source slugs for source-specific rules */
   activeSourceSlugs?: string[];
+  /** Skill slugs invoked this session (for skill-level permissions) */
+  activeSkillSlugs?: string[];
 }
 
 // ============================================================
@@ -342,6 +344,34 @@ export function loadSourcePermissionsConfig(
   }
 }
 
+/**
+ * Get path to skill permissions.json
+ */
+export function getSkillPermissionsPath(workspaceRootPath: string, skillSlug: string): string {
+  return join(workspaceRootPath, 'skills', skillSlug, 'permissions.json');
+}
+
+/**
+ * Load skill-level permissions config
+ */
+export function loadSkillPermissionsConfig(
+  workspaceRootPath: string,
+  skillSlug: string
+): PermissionsCustomConfig | null {
+  const path = getSkillPermissionsPath(workspaceRootPath, skillSlug);
+  if (!existsSync(path)) return null;
+
+  try {
+    const content = readFileSync(path, 'utf-8');
+    const config = parsePermissionsJson(content);
+    debug(`[Permissions] Loaded skill config from ${path}:`, config);
+    return config;
+  } catch (error) {
+    debug(`[Permissions] Error loading skill config:`, error);
+    return null;
+  }
+}
+
 // ============================================================
 // API Endpoint Checking
 // ============================================================
@@ -380,6 +410,7 @@ export function isApiEndpointAllowed(
 class PermissionsConfigCache {
   private workspaceConfigs: Map<string, PermissionsCustomConfig | null> = new Map();
   private sourceConfigs: Map<string, PermissionsCustomConfig | null> = new Map();
+  private skillConfigs: Map<string, PermissionsCustomConfig | null> = new Map();
   private mergedConfigs: Map<string, MergedPermissionsConfig> = new Map();
 
   // App-level default permissions (loaded from ~/.craft-agent/permissions/default.json)
@@ -418,6 +449,17 @@ class PermissionsConfigCache {
   }
 
   /**
+   * Get or load skill config
+   */
+  getSkillConfig(workspaceRootPath: string, skillSlug: string): PermissionsCustomConfig | null {
+    const key = `${workspaceRootPath}::${skillSlug}`;
+    if (!this.skillConfigs.has(key)) {
+      this.skillConfigs.set(key, loadSkillPermissionsConfig(workspaceRootPath, skillSlug));
+    }
+    return this.skillConfigs.get(key) ?? null;
+  }
+
+  /**
    * Invalidate app-level default permissions (called by ConfigWatcher)
    * This clears all merged configs since defaults affect everything
    */
@@ -449,18 +491,43 @@ class PermissionsConfigCache {
     debug(`[Permissions] Invalidating source config: ${workspaceRootPath}/${sourceSlug}`);
     this.sourceConfigs.delete(`${workspaceRootPath}::${sourceSlug}`);
     // Clear merged configs that include this source
-    // Cache key format: "{workspaceRootPath}::{source1},{source2},..."
+    // Cache key format: "{workspaceRootPath}::{source1},{source2},...::{skill1},{skill2},..."
     // Use precise matching to avoid false positives (e.g., "linear" matching "linear-triage")
     for (const key of this.mergedConfigs.keys()) {
       if (!key.startsWith(`${workspaceRootPath}::`)) continue;
 
-      // Extract sources portion after the ::
-      const sourcesStr = key.slice(workspaceRootPath.length + 2);
+      // Extract sources portion (between first :: and second ::)
+      const afterWorkspace = key.slice(workspaceRootPath.length + 2);
+      const sourcesStr = afterWorkspace.split('::')[0] ?? '';
       if (!sourcesStr) continue;
 
       // Check for exact match: at start, end, or between commas
       const sources = sourcesStr.split(',');
       if (sources.includes(sourceSlug)) {
+        this.mergedConfigs.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Invalidate skill config (called by ConfigWatcher)
+   */
+  invalidateSkill(workspaceRootPath: string, skillSlug: string): void {
+    debug(`[Permissions] Invalidating skill config: ${workspaceRootPath}/${skillSlug}`);
+    this.skillConfigs.delete(`${workspaceRootPath}::${skillSlug}`);
+    // Clear merged configs that include this skill
+    // Cache key format: "{workspaceRootPath}::{sources}::{skills}"
+    for (const key of this.mergedConfigs.keys()) {
+      if (!key.startsWith(`${workspaceRootPath}::`)) continue;
+
+      // Extract skills portion (after second ::)
+      const afterWorkspace = key.slice(workspaceRootPath.length + 2);
+      const parts = afterWorkspace.split('::');
+      const skillsStr = parts[1] ?? '';
+      if (!skillsStr) continue;
+
+      const skills = skillsStr.split(',');
+      if (skills.includes(skillSlug)) {
         this.mergedConfigs.delete(key);
       }
     }
@@ -524,6 +591,18 @@ class PermissionsConfigCache {
         if (srcConfig) {
           // Use applySourceConfig which auto-scopes MCP patterns to this source
           this.applySourceConfig(merged, srcConfig, sourceSlug);
+        }
+      }
+    }
+
+    // Add skill-level permissions (only for invoked skills)
+    if (context.activeSkillSlugs) {
+      for (const skillSlug of context.activeSkillSlugs) {
+        const skillConfig = this.getSkillConfig(context.workspaceRootPath, skillSlug);
+        if (skillConfig) {
+          // Skills use applyCustomConfig (not applySourceConfig) because
+          // skills don't own MCP servers, so no auto-scoping needed
+          this.applyCustomConfig(merged, skillConfig);
         }
       }
     }
@@ -682,7 +761,8 @@ class PermissionsConfigCache {
 
   private buildCacheKey(context: PermissionsContext): string {
     const sources = context.activeSourceSlugs?.sort().join(',') ?? '';
-    return `${context.workspaceRootPath}::${sources}`;
+    const skills = context.activeSkillSlugs?.sort().join(',') ?? '';
+    return `${context.workspaceRootPath}::${sources}::${skills}`;
   }
 
   /**
@@ -692,6 +772,7 @@ class PermissionsConfigCache {
     this.defaultConfig = undefined;
     this.workspaceConfigs.clear();
     this.sourceConfigs.clear();
+    this.skillConfigs.clear();
     this.mergedConfigs.clear();
   }
 }
