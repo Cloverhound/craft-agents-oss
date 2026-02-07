@@ -45,6 +45,7 @@ src/
 ├── sources/            # Source types, storage, service
 ├── statuses/           # Dynamic status types, CRUD, storage
 ├── subscription/       # Craft subscription checking
+├── queue/              # Work Queue: task types, CRUD, storage, validation, MCP tools
 ├── utils/              # Debug logging, file handling, summarization
 ├── validation/         # URL validation
 ├── version/            # Version management, install scripts

@@ -88,6 +88,7 @@ Each type is a folder at `queue/types/{slug}/` containing a `config.json`:
 | `icon` | string? | Emoji or URL (auto-downloaded) |
 | `tagline` | string? | Short tagline for list display |
 | `source` | string? | Originating source integration slug |
+| `dedupTemplate` | string? | Dedup template with `{field}` placeholders (see Deduplication) |
 | `fields` | Record | Field schema (see below) |
 | `states` | array | Lifecycle states (see below) |
 | `displayTemplate` | string? | Reference to display.md template |
@@ -168,6 +169,7 @@ Individual tasks are stored at `queue/tasks/{task-id}.json`:
 |----------|------|-------------|
 | `id` | string | Unique ID: `tsk-{YYMMDD}-{random8hex}` |
 | `typeSlug` | string | Task type slug |
+| `dedupId` | string? | Resolved dedup key (see Deduplication) |
 | `title` | string | Human-readable title |
 | `state` | string | Current lifecycle state ID |
 | `priority` | number? | Numeric priority (lower = higher) |
@@ -194,8 +196,8 @@ Individual tasks are stored at `queue/tasks/{task-id}.json`:
 
 | Tool | Description |
 |------|-------------|
-| `queue_push` | Create a new task (type, title, data, priority, labels) |
-| `queue_bulk_push` | Create multiple tasks in one batch call |
+| `queue_push` | Create a new task (with dedup upsert if dedupTemplate/dedupId set) |
+| `queue_bulk_push` | Create multiple tasks in one batch call (with dedup upsert) |
 | `queue_update` | Update task state, data fields, priority, or labels |
 | `queue_delete` | Delete a task |
 | `queue_type_create` | Create a new task type definition |
@@ -293,6 +295,62 @@ This checks:
 - All task type configs (fields, states, slug format)
 - All tasks (valid type references, valid states, required fields)
 - Orphaned tasks (referencing deleted types)
+
+## Deduplication
+
+Task types can define a `dedupTemplate` — a pattern string with `{field}` placeholders that resolves to a deterministic dedup ID from task data. This makes push operations idempotent: re-syncing from an external source updates existing tasks instead of creating duplicates.
+
+### Setup
+
+Add `dedupTemplate` to the task type definition:
+
+```json
+{
+  "name": "Overdue Invoice Followup",
+  "source": "xero",
+  "dedupTemplate": "xero:{invoice_number}",
+  "fields": {
+    "invoice_number": { "type": "string", "label": "Invoice #", "required": true }
+  }
+}
+```
+
+### How It Works
+
+When a task is pushed (`queue_push` or `queue_bulk_push`):
+
+1. The `dedupId` is resolved from the template: `"xero:{invoice_number}"` + `{ invoice_number: "INV-2828" }` = `"xero:INV-2828"`
+2. If an existing task has the same `typeSlug` + `dedupId`, it's **upserted**: `data`, `title`, `priority`, and `labels` are updated, while `state`, `completedAt`, and other workflow fields are preserved
+3. If no match, a new task is created with the `dedupId` set
+
+### Template Examples
+
+```
+// External system ID
+"xero:{invoice_number}"         → "xero:INV-2828"
+
+// Agent-generated compound key
+"{customer}:{month}"            → "Acme Corp:2026-02"
+
+// Simple single-field key
+"{ticket_id}"                   → "TKT-4821"
+```
+
+### Explicit Override
+
+Callers can pass `dedupId` directly in the push input to override template resolution:
+
+```
+queue_push({ typeSlug: "...", title: "...", data: {...}, dedupId: "custom:my-key" })
+```
+
+This is useful when the key comes from runtime context not in the data fields, or the type doesn't define a template.
+
+### Validation
+
+`config_validate({ target: "queue" })` checks that:
+- All `{field}` references in `dedupTemplate` exist in the type's field schema
+- No duplicate `dedupId` values exist within the same type
 
 ## Design Decisions
 
