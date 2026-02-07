@@ -26,7 +26,7 @@ import {
   saveCredentialConfig,
 } from './registry.ts';
 import { matchCredential } from './matcher.ts';
-import type { LoadedCredentialConfig, OAuth2AuthConfig } from './credential-config-types.ts';
+import type { CredentialAuthConfig, LoadedCredentialConfig, OAuth2AuthConfig } from './credential-config-types.ts';
 import type { SessionScopedToolCallbacks, CredentialInputMode } from '../agent/session-scoped-tools.ts';
 
 // ============================================================
@@ -34,12 +34,31 @@ import type { SessionScopedToolCallbacks, CredentialInputMode } from '../agent/s
 // ============================================================
 
 /**
+ * Map credential auth type to the credential store type used for storage.
+ */
+function authTypeToStoreType(authType: CredentialAuthConfig['type']): string {
+  switch (authType) {
+    case 'oauth2':
+      return 'source_oauth';
+    case 'bearer':
+      return 'source_bearer';
+    case 'basic':
+      return 'source_basic';
+    case 'header':
+    case 'multi-header':
+    case 'query':
+    default:
+      return 'source_apikey';
+  }
+}
+
+/**
  * Build the credential store key for a workspace credential.
  * Uses a distinct prefix 'credential' to avoid collisions with source credentials.
  */
-function getCredentialStoreId(workspaceId: string, slug: string): CredentialId {
+function getCredentialStoreId(workspaceId: string, slug: string, authType?: CredentialAuthConfig['type']): CredentialId {
   return {
-    type: 'source_apikey', // Reuse existing type — stored the same way
+    type: authTypeToStoreType(authType ?? 'header') as any,
     workspaceId,
     sourceId: `cred_${slug}`, // Prefix to distinguish from source credentials
   };
@@ -510,7 +529,7 @@ Returns the HTTP status to verify authentication works.`,
           }
         }
       } else {
-        const credId = getCredentialStoreId(workspaceId, args.slug);
+        const credId = getCredentialStoreId(workspaceId, args.slug, config.auth.type);
         const stored = await credManager.get(credId);
         if (stored?.value) {
           switch (config.auth.type) {

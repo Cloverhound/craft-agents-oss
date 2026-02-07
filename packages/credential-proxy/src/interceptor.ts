@@ -196,6 +196,25 @@ export function buildAuthHeaders(
 }
 
 /**
+ * Map credential auth type to the credential store type used for storage.
+ */
+function authTypeToStoreType(authType: CredentialAuthConfig['type']): string {
+  switch (authType) {
+    case 'oauth2':
+      return 'source_oauth';
+    case 'bearer':
+      return 'source_bearer';
+    case 'basic':
+      return 'source_basic';
+    case 'header':
+    case 'multi-header':
+    case 'query':
+    default:
+      return 'source_apikey';
+  }
+}
+
+/**
  * Load the secret value for a credential from the encrypted store.
  * Ported from auth-curl's loadSecret.
  */
@@ -207,17 +226,10 @@ export async function loadSecret(
   const { getCredentialManager } = await import('@craft-agent/shared/credentials');
   const manager = getCredentialManager();
 
-  if (authType === 'oauth2') {
-    const oauthCred = await manager.get({
-      type: 'source_oauth',
-      workspaceId,
-      sourceId: `cred_${slug}`,
-    });
-    return oauthCred?.value ?? null;
-  }
+  const storeType = authTypeToStoreType(authType);
 
   const cred = await manager.get({
-    type: 'source_apikey',
+    type: storeType as any,
     workspaceId,
     sourceId: `cred_${slug}`,
   });
