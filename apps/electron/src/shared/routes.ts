@@ -156,6 +156,24 @@ export const routes = {
       return `credentials/credential/${credentialSlug}` as const
     },
 
+    /** Queue view (queue navigator). Supports type filtering and task/type detail views. */
+    queue: (params?: { typeSlug?: string; taskId?: string; typeDetailSlug?: string }) => {
+      const { typeSlug, taskId, typeDetailSlug } = params ?? {}
+      if (typeDetailSlug) {
+        return `queue/type-info/${typeDetailSlug}` as const
+      }
+      if (typeSlug && taskId) {
+        return `queue/type/${typeSlug}/task/${taskId}` as const
+      }
+      if (taskId) {
+        return `queue/task/${taskId}` as const
+      }
+      if (typeSlug) {
+        return `queue/type/${typeSlug}` as const
+      }
+      return 'queue' as const
+    },
+
     /** Settings view (settings navigator) */
     settings: (subpage?: 'app' | 'appearance' | 'input' | 'workspace' | 'permissions' | 'labels' | 'shortcuts' | 'preferences') =>
       subpage && subpage !== 'app'

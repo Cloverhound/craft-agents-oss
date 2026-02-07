@@ -58,6 +58,7 @@ import {
   isSettingsNavigation,
   isSkillsNavigation,
   isCredentialsNavigation,
+  isQueueNavigation,
   DEFAULT_NAVIGATION_STATE,
   parseDefaultChatFilter,
 } from '../../shared/types'
@@ -72,7 +73,7 @@ export type { Route }
 
 // Re-export navigation state types for consumers
 export type { NavigationState, ChatFilter }
-export { isChatsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation, isCredentialsNavigation }
+export { isChatsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation, isCredentialsNavigation, isQueueNavigation }
 
 interface NavigationContextValue {
   /** Navigate to a route */

@@ -9,7 +9,7 @@ import type { LoadedSkill, LoadedSource, FileSearchResult } from '../../../share
 // Types
 // ============================================================================
 
-export type MentionItemType = 'skill' | 'source' | 'file' | 'folder'
+export type MentionItemType = 'skill' | 'source' | 'file' | 'folder' | 'task'
 
 export interface MentionItem {
   id: string

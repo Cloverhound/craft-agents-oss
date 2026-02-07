@@ -136,6 +136,14 @@ export interface ConfigWatcherCallbacks {
   /** Called when labels config.json changes */
   onLabelConfigChange?: (workspaceId: string) => void;
 
+  // Queue callbacks
+  /** Called when queue config.json changes */
+  onQueueConfigChange?: (workspaceId: string) => void;
+  /** Called when a queue task type config changes */
+  onQueueTypeChange?: (workspaceId: string, typeSlug: string) => void;
+  /** Called when a queue task file changes */
+  onQueueTaskChange?: (workspaceId: string, taskId: string) => void;
+
   // Session callbacks
   /** Called when a session's JSONL header is modified externally (labels, name, flags, etc.) */
   onSessionMetadataChange?: (sessionId: string, header: SessionHeader) => void;
@@ -478,6 +486,35 @@ export class ConfigWatcher {
         return;
       }
 
+    }
+
+    // Queue changes: queue/...
+    if (parts[0] === 'queue' && parts.length >= 2) {
+      // Queue config: queue/config.json
+      if (relativePath === 'queue/config.json') {
+        this.debounce('queue-config', () => this.handleQueueConfigChange());
+        return;
+      }
+
+      // Queue types: queue/types/{slug}/config.json
+      if (parts[1] === 'types' && parts.length >= 4) {
+        const typeSlug = parts[2]!;
+        const file = parts[3];
+        if (file === 'config.json') {
+          this.debounce(`queue-type:${typeSlug}`, () => this.handleQueueTypeChange(typeSlug));
+          return;
+        }
+      }
+
+      // Queue tasks: queue/tasks/{id}.json
+      if (parts[1] === 'tasks' && parts.length >= 3) {
+        const file = parts[2]!;
+        if (file.endsWith('.json')) {
+          const taskId = file.replace('.json', '');
+          this.debounce(`queue-task:${taskId}`, () => this.handleQueueTaskChange(taskId));
+          return;
+        }
+      }
     }
   }
 
@@ -1027,6 +1064,34 @@ export class ConfigWatcher {
   private handleLabelConfigChange(): void {
     debug('[ConfigWatcher] Labels config.json changed:', this.workspaceId);
     this.callbacks.onLabelConfigChange?.(this.workspaceId);
+  }
+
+  // ============================================================
+  // Queue Handlers
+  // ============================================================
+
+  /**
+   * Handle queue config.json change
+   */
+  private handleQueueConfigChange(): void {
+    debug('[ConfigWatcher] Queue config.json changed:', this.workspaceId);
+    this.callbacks.onQueueConfigChange?.(this.workspaceId);
+  }
+
+  /**
+   * Handle queue type config change
+   */
+  private handleQueueTypeChange(typeSlug: string): void {
+    debug('[ConfigWatcher] Queue type changed:', typeSlug, 'in', this.workspaceId);
+    this.callbacks.onQueueTypeChange?.(this.workspaceId, typeSlug);
+  }
+
+  /**
+   * Handle queue task file change
+   */
+  private handleQueueTaskChange(taskId: string): void {
+    debug('[ConfigWatcher] Queue task changed:', taskId, 'in', this.workspaceId);
+    this.callbacks.onQueueTaskChange?.(this.workspaceId, taskId);
   }
 
   // ============================================================

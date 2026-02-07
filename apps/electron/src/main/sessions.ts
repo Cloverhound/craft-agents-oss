@@ -621,6 +621,18 @@ export class SessionManager {
         sessionLog.info(`Label config changed in ${workspaceId}`)
         this.broadcastLabelsChanged(workspaceId)
       },
+      onQueueConfigChange: () => {
+        sessionLog.info(`Queue config changed in ${workspaceId}`)
+        this.broadcastQueueChanged(workspaceId)
+      },
+      onQueueTypeChange: (_workspaceId: string, typeSlug: string) => {
+        sessionLog.info(`Queue type changed: ${typeSlug} in ${workspaceId}`)
+        this.broadcastQueueChanged(workspaceId)
+      },
+      onQueueTaskChange: (_workspaceId: string, taskId: string) => {
+        sessionLog.info(`Queue task changed: ${taskId} in ${workspaceId}`)
+        this.broadcastQueueChanged(workspaceId)
+      },
       onAppThemeChange: (theme) => {
         sessionLog.info(`App theme changed`)
         this.broadcastAppThemeChanged(theme)
@@ -773,6 +785,15 @@ export class SessionManager {
     if (!this.windowManager) return
     sessionLog.info('Broadcasting default permissions changed')
     this.windowManager.broadcastToAll(IPC_CHANNELS.DEFAULT_PERMISSIONS_CHANGED, null)
+  }
+
+  /**
+   * Broadcast queue changed event to all windows
+   */
+  private broadcastQueueChanged(workspaceId: string): void {
+    if (!this.windowManager) return
+    sessionLog.info(`Broadcasting queue changed for ${workspaceId}`)
+    this.windowManager.broadcastToAll(IPC_CHANNELS.QUEUE_CHANGED, workspaceId)
   }
 
   /**

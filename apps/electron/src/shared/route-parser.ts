@@ -34,7 +34,7 @@ export interface ParsedRoute {
 // Compound Route Types (new format)
 // =============================================================================
 
-export type NavigatorType = 'chats' | 'sources' | 'skills' | 'credentials' | 'settings'
+export type NavigatorType = 'chats' | 'sources' | 'skills' | 'credentials' | 'queue' | 'settings'
 
 export interface ParsedCompoundRoute {
   /** The navigator type */
@@ -58,7 +58,7 @@ export interface ParsedCompoundRoute {
  * Known prefixes that indicate a compound route
  */
 const COMPOUND_ROUTE_PREFIXES = [
-  'allChats', 'flagged', 'state', 'label', 'view', 'sources', 'skills', 'credentials', 'settings'
+  'allChats', 'flagged', 'state', 'label', 'view', 'sources', 'skills', 'credentials', 'queue', 'settings'
 ]
 
 /**
@@ -172,6 +172,47 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
     return null
   }
 
+  // Queue navigator
+  if (first === 'queue') {
+    if (segments.length === 1) {
+      return { navigator: 'queue', details: null }
+    }
+
+    // queue/type-info/{typeSlug} — type detail view
+    if (segments[1] === 'type-info' && segments[2]) {
+      return {
+        navigator: 'queue',
+        details: { type: 'type', id: segments[2] },
+      }
+    }
+
+    // queue/type/{typeSlug} — type filter (optionally with task detail)
+    if (segments[1] === 'type' && segments[2]) {
+      // queue/type/{typeSlug}/task/{taskId}
+      if (segments[3] === 'task' && segments[4]) {
+        return {
+          navigator: 'queue',
+          details: { type: 'task', id: segments[4] },
+        }
+      }
+      // queue/type/{typeSlug} — filter only
+      return {
+        navigator: 'queue',
+        details: { type: 'typeFilter', id: segments[2] },
+      }
+    }
+
+    // queue/task/{taskId} — task detail (no type filter)
+    if (segments[1] === 'task' && segments[2]) {
+      return {
+        navigator: 'queue',
+        details: { type: 'task', id: segments[2] },
+      }
+    }
+
+    return null
+  }
+
   // Chats navigator (allChats, flagged, state)
   let chatFilter: ChatFilter
   let detailsStartIndex: number
@@ -253,6 +294,14 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
   if (parsed.navigator === 'credentials') {
     if (!parsed.details) return 'credentials'
     return `credentials/credential/${parsed.details.id}`
+  }
+
+  if (parsed.navigator === 'queue') {
+    if (!parsed.details) return 'queue'
+    if (parsed.details.type === 'task') return `queue/task/${parsed.details.id}`
+    if (parsed.details.type === 'type') return `queue/type-info/${parsed.details.id}`
+    if (parsed.details.type === 'typeFilter') return `queue/type/${parsed.details.id}`
+    return 'queue'
   }
 
   // Chats navigator
@@ -373,6 +422,20 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
       return { type: 'view', name: 'credentials', params: {} }
     }
     return { type: 'view', name: 'credential-info', id: compound.details.id, params: {} }
+  }
+
+  // Queue
+  if (compound.navigator === 'queue') {
+    if (!compound.details) {
+      return { type: 'view', name: 'queue', params: {} }
+    }
+    if (compound.details.type === 'task') {
+      return { type: 'view', name: 'queue-task', id: compound.details.id, params: {} }
+    }
+    if (compound.details.type === 'type') {
+      return { type: 'view', name: 'queue-type', id: compound.details.id, params: {} }
+    }
+    return { type: 'view', name: 'queue', params: {} }
   }
 
   // Chats
@@ -503,6 +566,33 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
     }
   }
 
+  // Queue
+  if (compound.navigator === 'queue') {
+    if (!compound.details) {
+      return { navigator: 'queue', details: null }
+    }
+    if (compound.details.type === 'task') {
+      return {
+        navigator: 'queue',
+        details: { type: 'task', taskId: compound.details.id },
+      }
+    }
+    if (compound.details.type === 'type') {
+      return {
+        navigator: 'queue',
+        details: { type: 'type', typeSlug: compound.details.id },
+      }
+    }
+    if (compound.details.type === 'typeFilter') {
+      return {
+        navigator: 'queue',
+        typeFilter: compound.details.id,
+        details: null,
+      }
+    }
+    return { navigator: 'queue', details: null }
+  }
+
   // Chats
   const filter = compound.chatFilter || { kind: 'allChats' as const }
   if (compound.details) {
@@ -580,6 +670,24 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
         }
       }
       return { navigator: 'credentials', details: null }
+    case 'queue':
+      return { navigator: 'queue', details: null }
+    case 'queue-task':
+      if (parsed.id) {
+        return {
+          navigator: 'queue',
+          details: { type: 'task', taskId: parsed.id },
+        }
+      }
+      return { navigator: 'queue', details: null }
+    case 'queue-type':
+      if (parsed.id) {
+        return {
+          navigator: 'queue',
+          details: { type: 'type', typeSlug: parsed.id },
+        }
+      }
+      return { navigator: 'queue', details: null }
     case 'chat':
       if (parsed.id) {
         // Reconstruct filter from params
@@ -677,6 +785,22 @@ export function buildRouteFromNavigationState(state: NavigationState): string {
       return `credentials/credential/${state.details.credentialSlug}`
     }
     return 'credentials'
+  }
+
+  if (state.navigator === 'queue') {
+    if (state.details?.type === 'task') {
+      if (state.typeFilter) {
+        return `queue/type/${state.typeFilter}/task/${state.details.taskId}`
+      }
+      return `queue/task/${state.details.taskId}`
+    }
+    if (state.details?.type === 'type') {
+      return `queue/type-info/${state.details.typeSlug}`
+    }
+    if (state.typeFilter) {
+      return `queue/type/${state.typeFilter}`
+    }
+    return 'queue'
   }
 
   // Chats

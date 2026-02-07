@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { X } from 'lucide-react'
+import { X, ListTodo } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { SkillAvatar } from '@/components/ui/skill-avatar'
 import { SourceAvatar } from '@/components/ui/source-avatar'
@@ -59,6 +59,9 @@ export function MentionBadge({
       )}
       {type === 'source' && source && (
         <SourceAvatar source={source} size="xs" />
+      )}
+      {type === 'task' && (
+        <ListTodo className="h-3 w-3 shrink-0 text-foreground/50" />
       )}
 
       {/* Label */}
