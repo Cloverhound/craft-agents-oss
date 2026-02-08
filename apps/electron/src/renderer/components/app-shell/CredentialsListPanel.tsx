@@ -6,8 +6,8 @@
  */
 
 import * as React from 'react'
-import { useState } from 'react'
-import { MoreHorizontal, KeyRound } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { MoreHorizontal, KeyRound, RefreshCw } from 'lucide-react'
 import { CredentialAvatar } from '@/components/ui/credential-avatar'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent } from '@/components/ui/empty'
@@ -49,6 +49,30 @@ export function CredentialsListPanel({
   workspaceRootPath,
   className,
 }: CredentialsListPanelProps) {
+  const [testingSlugs, setTestingSlugs] = useState<Set<string>>(new Set())
+
+  // Auto-test all credentials on mount
+  useEffect(() => {
+    if (!workspaceId || credentials.length === 0) return
+    const hasTestable = credentials.some(c => c.testRequest)
+    if (hasTestable) {
+      window.electronAPI.testAllCredentials(workspaceId).catch(() => {})
+    }
+  }, [workspaceId]) // eslint-disable-line react-hooks/exhaustive-deps -- only on mount/workspace change
+
+  const handleTestCredential = useCallback((slug: string) => {
+    if (!workspaceId) return
+    setTestingSlugs(prev => new Set(prev).add(slug))
+    window.electronAPI.testCredential(workspaceId, slug)
+      .finally(() => {
+        setTestingSlugs(prev => {
+          const next = new Set(prev)
+          next.delete(slug)
+          return next
+        })
+      })
+  }, [workspaceId])
+
   // Empty state - rendered outside ScrollArea for proper vertical centering
   if (credentials.length === 0) {
     return (
@@ -99,6 +123,8 @@ export function CredentialsListPanel({
                 isSelected={selectedCredentialSlug === cred.slug}
                 isFirst={index === 0}
                 workspaceId={workspaceId}
+                isTesting={testingSlugs.has(cred.slug)}
+                onTest={() => handleTestCredential(cred.slug)}
                 onClick={() => onCredentialClick(cred)}
                 onDelete={() => onDeleteCredential(cred.slug)}
               />
@@ -115,11 +141,13 @@ interface CredentialItemProps {
   isSelected: boolean
   isFirst: boolean
   workspaceId?: string
+  isTesting: boolean
+  onTest: () => void
   onClick: () => void
   onDelete: () => void
 }
 
-function CredentialItem({ credential, isSelected, isFirst, workspaceId, onClick, onDelete }: CredentialItemProps) {
+function CredentialItem({ credential, isSelected, isFirst, workspaceId, isTesting, onTest, onClick, onDelete }: CredentialItemProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
 
@@ -161,11 +189,22 @@ function CredentialItem({ credential, isSelected, isFirst, workspaceId, onClick,
               <div className="font-medium font-sans line-clamp-2 min-w-0 -mb-[2px]">
                 {credential.name}
               </div>
-              {/* Auth status indicator */}
-              <div className={cn(
-                "mt-1.5 w-1.5 h-1.5 rounded-full shrink-0",
-                credential.isAuthenticated ? "bg-green-500" : "bg-yellow-500"
-              )} />
+              {/* Auth status indicator + refresh */}
+              {isTesting ? (
+                <RefreshCw className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground animate-spin" />
+              ) : (
+                <div
+                  className={cn(
+                    "mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 cursor-pointer",
+                    credential.isAuthenticated ? "bg-green-500" : "bg-yellow-500"
+                  )}
+                  title={credential.testRequest ? "Click to test" : undefined}
+                  onClick={credential.testRequest ? (e) => {
+                    e.stopPropagation()
+                    onTest()
+                  } : undefined}
+                />
+              )}
             </div>
             {/* Subtitle - description or URL patterns */}
             <div className="flex items-center gap-1.5 text-xs text-foreground/70 w-full -mb-[2px] pr-6 min-w-0">
@@ -182,8 +221,20 @@ function CredentialItem({ credential, isSelected, isFirst, workspaceId, onClick,
             menuOpen || contextMenuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100"
           )}
         >
-          {/* More menu */}
+          {/* Refresh + More menu */}
           <div className="flex items-center rounded-[8px] overflow-hidden border border-transparent hover:border-border/50">
+            {credential.testRequest && (
+              <div
+                className="p-1.5 hover:bg-foreground/10 cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onTest()
+                }}
+                title="Test credential"
+              >
+                <RefreshCw className={cn("h-4 w-4 text-muted-foreground", isTesting && "animate-spin")} />
+              </div>
+            )}
             <DropdownMenu modal={true} onOpenChange={setMenuOpen}>
               <DropdownMenuTrigger asChild>
                 <div className="p-1.5 hover:bg-foreground/10 data-[state=open]:bg-foreground/10 cursor-pointer">

@@ -52,6 +52,9 @@ export type {
 // URL matching
 export { matchCredential, matchUrlPattern, findCredentialBySlug } from './matcher.ts';
 
+// Credential testing
+export { testCredential } from './credential-tools.ts';
+
 // OAuth flow
 export { runCredentialOAuthFlow, refreshCredentialToken } from './oauth-flow.ts';
 export type { CredentialOAuthOptions, CredentialOAuthResult } from './oauth-flow.ts';

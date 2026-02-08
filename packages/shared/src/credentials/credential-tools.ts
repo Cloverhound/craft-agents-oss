@@ -447,6 +447,133 @@ Requires that client credentials have been set up first via \`credential_oauth_c
 }
 
 /**
+ * Test a credential by making its configured test request.
+ * Loads the credential from the encrypted store, makes the HTTP request,
+ * and updates isAuthenticated + lastTestedAt in the config file.
+ *
+ * This is the shared implementation used by both the MCP tool and IPC handler.
+ */
+export async function testCredential(
+  workspaceRootPath: string,
+  slug: string
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  debug('[testCredential] Testing:', slug);
+
+  const config = loadCredentialConfig(workspaceRootPath, slug);
+  if (!config) {
+    return { ok: false, error: `Credential config '${slug}' not found.` };
+  }
+
+  if (!config.testRequest) {
+    // No test endpoint configured — nothing to test, assume ok
+    return { ok: true };
+  }
+
+  // Load the credential
+  const credManager = getCredentialManager();
+  const workspaceId = basename(workspaceRootPath);
+
+  // Try OAuth tokens first, then static credentials
+  let token: string | null = null;
+  let authHeaders: Record<string, string> = {};
+
+  if (config.auth.type === 'oauth2') {
+    const tokenId = getOAuthTokenStoreId(workspaceId, slug);
+    const stored = await credManager.get(tokenId);
+    if (stored?.value) {
+      // Check expiry
+      if (stored.expiresAt && Date.now() > stored.expiresAt - 60000) {
+        // Try refresh
+        if (stored.refreshToken && stored.clientId && stored.clientSecret) {
+          const { refreshCredentialToken } = await import('./oauth-flow.ts');
+          const refreshResult = await refreshCredentialToken(
+            (config.auth as OAuth2AuthConfig).tokenUrl,
+            stored.refreshToken,
+            stored.clientId,
+            stored.clientSecret
+          );
+          if (refreshResult.success && refreshResult.accessToken) {
+            token = refreshResult.accessToken;
+            // Update stored token
+            await credManager.set(tokenId, {
+              ...stored,
+              value: refreshResult.accessToken,
+              refreshToken: refreshResult.refreshToken || stored.refreshToken,
+              expiresAt: refreshResult.expiresAt,
+            });
+          }
+        }
+      } else {
+        token = stored.value;
+      }
+      if (token) {
+        authHeaders['Authorization'] = `Bearer ${token}`;
+      }
+    }
+  } else {
+    const credId = getCredentialStoreId(workspaceId, slug, config.auth.type);
+    const stored = await credManager.get(credId);
+    if (stored?.value) {
+      switch (config.auth.type) {
+        case 'bearer': {
+          const scheme = config.auth.scheme || 'Bearer';
+          authHeaders['Authorization'] = `${scheme} ${stored.value}`;
+          break;
+        }
+        case 'header': {
+          authHeaders[config.auth.headerName] = stored.value;
+          break;
+        }
+        case 'multi-header': {
+          try {
+            const parsed = JSON.parse(stored.value);
+            Object.assign(authHeaders, parsed);
+          } catch { /* ignore */ }
+          break;
+        }
+        case 'basic': {
+          try {
+            const parsed = JSON.parse(stored.value);
+            const basicAuth = Buffer.from(`${parsed.username}:${parsed.password}`).toString('base64');
+            authHeaders['Authorization'] = `Basic ${basicAuth}`;
+          } catch { /* ignore */ }
+          break;
+        }
+      }
+    }
+  }
+
+  if (Object.keys(authHeaders).length === 0) {
+    return { ok: false, error: `No credentials found for '${slug}'. Set up credentials first.` };
+  }
+
+  // Make the test request
+  try {
+    const response = await fetch(config.testRequest.url, {
+      method: config.testRequest.method || 'GET',
+      headers: authHeaders,
+    });
+
+    // Update config status
+    config.isAuthenticated = response.ok;
+    config.lastTestedAt = Date.now();
+    saveCredentialConfig(workspaceRootPath, config);
+
+    if (response.ok) {
+      return { ok: true, status: response.status };
+    } else {
+      return { ok: false, status: response.status, error: `HTTP ${response.status}: ${response.statusText}` };
+    }
+  } catch (error) {
+    config.isAuthenticated = false;
+    config.lastTestedAt = Date.now();
+    saveCredentialConfig(workspaceRootPath, config);
+
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * Create the credential_test tool.
  * Verifies credentials work by making the configured test request.
  */
@@ -464,155 +591,27 @@ Returns the HTTP status to verify authentication works.`,
       slug: z.string().describe('The credential slug to test'),
     },
     async (args) => {
-      debug('[credential_test] Testing:', args.slug);
+      const result = await testCredential(workspaceRootPath, args.slug);
 
-      const config = loadCredentialConfig(workspaceRootPath, args.slug);
-      if (!config) {
+      if (result.error) {
         return {
           content: [{
             type: 'text' as const,
-            text: `Credential config '${args.slug}' not found.`,
+            text: result.status
+              ? `Credential '${args.slug}' test failed. ${result.error}`
+              : result.error,
           }],
           isError: true,
         };
       }
 
-      if (!config.testRequest) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `Credential '${args.slug}' has no testRequest configured. Add one to the credential config to enable testing.`,
-          }],
-          isError: true,
-        };
-      }
-
-      // Load the credential
-      const credManager = getCredentialManager();
-      const workspaceId = basename(workspaceRootPath);
-
-      // Try OAuth tokens first, then static credentials
-      let token: string | null = null;
-      let authHeaders: Record<string, string> = {};
-
-      if (config.auth.type === 'oauth2') {
-        const tokenId = getOAuthTokenStoreId(workspaceId, args.slug);
-        const stored = await credManager.get(tokenId);
-        if (stored?.value) {
-          // Check expiry
-          if (stored.expiresAt && Date.now() > stored.expiresAt - 60000) {
-            // Try refresh
-            if (stored.refreshToken && stored.clientId && stored.clientSecret) {
-              const { refreshCredentialToken } = await import('./oauth-flow.ts');
-              const refreshResult = await refreshCredentialToken(
-                (config.auth as OAuth2AuthConfig).tokenUrl,
-                stored.refreshToken,
-                stored.clientId,
-                stored.clientSecret
-              );
-              if (refreshResult.success && refreshResult.accessToken) {
-                token = refreshResult.accessToken;
-                // Update stored token
-                await credManager.set(tokenId, {
-                  ...stored,
-                  value: refreshResult.accessToken,
-                  refreshToken: refreshResult.refreshToken || stored.refreshToken,
-                  expiresAt: refreshResult.expiresAt,
-                });
-              }
-            }
-          } else {
-            token = stored.value;
-          }
-          if (token) {
-            authHeaders['Authorization'] = `Bearer ${token}`;
-          }
-        }
-      } else {
-        const credId = getCredentialStoreId(workspaceId, args.slug, config.auth.type);
-        const stored = await credManager.get(credId);
-        if (stored?.value) {
-          switch (config.auth.type) {
-            case 'bearer': {
-              const scheme = config.auth.scheme || 'Bearer';
-              authHeaders['Authorization'] = `${scheme} ${stored.value}`;
-              break;
-            }
-            case 'header': {
-              authHeaders[config.auth.headerName] = stored.value;
-              break;
-            }
-            case 'multi-header': {
-              try {
-                const parsed = JSON.parse(stored.value);
-                Object.assign(authHeaders, parsed);
-              } catch { /* ignore */ }
-              break;
-            }
-            case 'basic': {
-              try {
-                const parsed = JSON.parse(stored.value);
-                const basicAuth = Buffer.from(`${parsed.username}:${parsed.password}`).toString('base64');
-                authHeaders['Authorization'] = `Basic ${basicAuth}`;
-              } catch { /* ignore */ }
-              break;
-            }
-          }
-        }
-      }
-
-      if (Object.keys(authHeaders).length === 0) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `No credentials found for '${args.slug}'. Set up credentials first.`,
-          }],
-          isError: true,
-        };
-      }
-
-      // Make the test request
-      try {
-        const response = await fetch(config.testRequest.url, {
-          method: config.testRequest.method || 'GET',
-          headers: authHeaders,
-        });
-
-        // Update config status
-        config.isAuthenticated = response.ok;
-        config.lastTestedAt = Date.now();
-        saveCredentialConfig(workspaceRootPath, config);
-
-        if (response.ok) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: `Credential '${config.name}' is working. Test request returned HTTP ${response.status}.`,
-            }],
-            isError: false,
-          };
-        } else {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: `Credential '${config.name}' test failed. HTTP ${response.status}: ${response.statusText}`,
-            }],
-            isError: true,
-          };
-        }
-      } catch (error) {
-        config.isAuthenticated = false;
-        config.lastTestedAt = Date.now();
-        saveCredentialConfig(workspaceRootPath, config);
-
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `Test request failed: ${error instanceof Error ? error.message : String(error)}`,
-          }],
-          isError: true,
-        };
-      }
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Credential '${args.slug}' is working. Test request returned HTTP ${result.status}.`,
+        }],
+        isError: false,
+      };
     }
   );
 }

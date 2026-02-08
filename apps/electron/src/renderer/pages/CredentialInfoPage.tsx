@@ -8,6 +8,7 @@
 
 import * as React from 'react'
 import { useEffect, useState, useCallback } from 'react'
+import { RefreshCw } from 'lucide-react'
 import { EditPopover, EditButton, getEditConfig } from '@/components/ui/EditPopover'
 import { toast } from 'sonner'
 import { CredentialMenu } from '@/components/app-shell/CredentialMenu'
@@ -43,6 +44,8 @@ export default function CredentialInfoPage({ credentialSlug, workspaceId }: Cred
   const [credential, setCredential] = useState<LoadedCredentialConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isTesting, setIsTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; status?: number; error?: string } | null>(null)
 
   // Load credential data
   useEffect(() => {
@@ -110,6 +113,21 @@ export default function CredentialInfoPage({ credentialSlug, workspaceId }: Cred
       toast.error('Failed to delete credential', {
         description: err instanceof Error ? err.message : 'Unknown error',
       })
+    }
+  }, [credential, workspaceId, credentialSlug])
+
+  // Handle test credential
+  const handleTest = useCallback(async () => {
+    if (!credential?.testRequest) return
+    setIsTesting(true)
+    setTestResult(null)
+    try {
+      const result = await window.electronAPI.testCredential(workspaceId, credentialSlug)
+      setTestResult(result)
+    } catch (err) {
+      setTestResult({ ok: false, error: err instanceof Error ? err.message : 'Test failed' })
+    } finally {
+      setIsTesting(false)
     }
   }, [credential, workspaceId, credentialSlug])
 
@@ -190,9 +208,21 @@ export default function CredentialInfoPage({ credentialSlug, workspaceId }: Cred
                 <Info_Badge color="default">{authTypeLabel(credential.auth.type)}</Info_Badge>
               </Info_Table.Row>
               <Info_Table.Row label="Status">
-                <Info_Badge color={credential.isAuthenticated ? 'success' : 'warning'}>
-                  {credential.isAuthenticated ? 'Authenticated' : 'Not authenticated'}
-                </Info_Badge>
+                <div className="flex items-center gap-2">
+                  <Info_Badge color={credential.isAuthenticated ? 'success' : 'warning'}>
+                    {credential.isAuthenticated ? 'Authenticated' : 'Not authenticated'}
+                  </Info_Badge>
+                  {credential.testRequest && (
+                    <button
+                      onClick={handleTest}
+                      disabled={isTesting}
+                      className="p-0.5 rounded hover:bg-foreground/5 transition-colors disabled:opacity-50"
+                      title="Test credential"
+                    >
+                      <RefreshCw className={`h-3 w-3 text-muted-foreground ${isTesting ? 'animate-spin' : ''}`} />
+                    </button>
+                  )}
+                </div>
               </Info_Table.Row>
               <Info_Table.Row label="Location">
                 <button
@@ -294,6 +324,23 @@ export default function CredentialInfoPage({ credentialSlug, workspaceId }: Cred
                   </Info_Table.Row>
                 )}
               </Info_Table>
+              <div className="px-4 pb-3 pt-1 flex items-center gap-3">
+                <button
+                  onClick={handleTest}
+                  disabled={isTesting}
+                  className="inline-flex items-center gap-1.5 h-7 px-3 text-xs font-medium rounded-[8px] bg-foreground/[0.03] border border-border/30 hover:bg-foreground/[0.06] transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3 w-3 ${isTesting ? 'animate-spin' : ''}`} />
+                  {isTesting ? 'Testing...' : 'Test Connection'}
+                </button>
+                {testResult && !isTesting && (
+                  <span className={`text-xs ${testResult.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                    {testResult.ok
+                      ? `Passed${testResult.status ? ` (HTTP ${testResult.status})` : ''}`
+                      : testResult.error || 'Failed'}
+                  </span>
+                )}
+              </div>
             </Info_Section>
           )}
 

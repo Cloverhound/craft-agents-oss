@@ -314,6 +314,10 @@ const api: ElectronAPI = {
     ipcRenderer.invoke(IPC_CHANNELS.CREDENTIALS_DELETE, workspaceId, credentialSlug),
   openCredentialInFinder: (workspaceId: string, credentialSlug: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.CREDENTIALS_OPEN_FINDER, workspaceId, credentialSlug),
+  testCredential: (workspaceId: string, credentialSlug: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.CREDENTIALS_TEST, workspaceId, credentialSlug),
+  testAllCredentials: (workspaceId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.CREDENTIALS_TEST_ALL, workspaceId),
 
   // Credentials change listener (live updates when credential configs change)
   onCredentialsChanged: (callback: (credentials: import('@craft-agent/shared/credentials/credential-config-types').LoadedCredentialConfig[]) => void) => {

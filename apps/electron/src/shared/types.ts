@@ -670,6 +670,8 @@ export const IPC_CHANNELS = {
   CREDENTIALS_DELETE: 'credentials:delete',
   CREDENTIALS_OPEN_FINDER: 'credentials:openFinder',
   CREDENTIALS_CHANGED: 'credentials:changed',
+  CREDENTIALS_TEST: 'credentials:test',
+  CREDENTIALS_TEST_ALL: 'credentials:testAll',
 
   // Skills (workspace-scoped)
   SKILLS_GET: 'skills:get',
@@ -978,6 +980,8 @@ export interface ElectronAPI {
   getCredentials(workspaceId: string): Promise<LoadedCredentialConfig[]>
   deleteCredential(workspaceId: string, credentialSlug: string): Promise<void>
   openCredentialInFinder(workspaceId: string, credentialSlug: string): Promise<void>
+  testCredential(workspaceId: string, credentialSlug: string): Promise<{ ok: boolean; status?: number; error?: string }>
+  testAllCredentials(workspaceId: string): Promise<void>
   // Credentials change listener (live updates when credential configs change)
   onCredentialsChanged?(callback: (credentials: LoadedCredentialConfig[]) => void): () => void
 

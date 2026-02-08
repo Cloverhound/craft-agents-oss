@@ -2176,6 +2176,34 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     await shell.showItemInFolder(configPath)
   })
 
+  // Test a single credential via its testRequest
+  ipcMain.handle(IPC_CHANNELS.CREDENTIALS_TEST, async (_event, workspaceId: string, credentialSlug: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { testCredential } = await import('@craft-agent/shared/credentials')
+    return testCredential(workspace.rootPath, credentialSlug)
+  })
+
+  // Test all credentials that have a testRequest configured
+  ipcMain.handle(IPC_CHANNELS.CREDENTIALS_TEST_ALL, async (_event, workspaceId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { loadCredentialRegistry } = await import('@craft-agent/shared/credentials/registry')
+    const { testCredential } = await import('@craft-agent/shared/credentials')
+
+    const credentials = loadCredentialRegistry(workspace.rootPath)
+    const testable = credentials.filter(c => c.testRequest)
+
+    if (testable.length > 0) {
+      ipcLog.info(`CREDENTIALS_TEST_ALL: Testing ${testable.length} credentials for workspace ${workspaceId}`)
+      await Promise.allSettled(
+        testable.map(c => testCredential(workspace.rootPath, c.slug))
+      )
+    }
+  })
+
   // ============================================================
   // Status Management (Workspace-scoped)
   // ============================================================
