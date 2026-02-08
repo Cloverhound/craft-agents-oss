@@ -11,7 +11,7 @@
  * - Pending/queued states (Electron only)
  */
 
-import type { ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import type { StoredAttachment, ContentBadge } from '@craft-agent/core'
 import { normalizePath } from '@craft-agent/core/utils'
 import { cn } from '../../lib/utils'
@@ -325,6 +325,8 @@ export interface UserMessageBubbleProps {
   ultrathink?: boolean
   /** Compact mode - reduces padding for popover embedding */
   compactMode?: boolean
+  /** Callback when edit is triggered. When defined, shows pencil icon on hover. */
+  onEdit?: () => void
 }
 
 export function UserMessageBubble({
@@ -338,6 +340,7 @@ export function UserMessageBubble({
   isQueued,
   ultrathink,
   compactMode,
+  onEdit,
 }: UserMessageBubbleProps) {
   const hasAttachments = attachments && attachments.length > 0
 
@@ -432,26 +435,40 @@ export function UserMessageBubble({
       )}
 
       {/* Text content bubble */}
-      <div
-        className={cn(
-          "max-w-[80%] bg-foreground/5 rounded-[16px] break-words min-w-0 select-text [&_p]:m-0",
-          compactMode ? "px-4 py-2" : "px-5 py-3.5",
-          isPending && "animate-shimmer"
+      <div className="group/edit relative max-w-[80%]">
+        <div
+          className={cn(
+            "bg-foreground/5 rounded-[16px] break-words min-w-0 select-text [&_p]:m-0",
+            compactMode ? "px-4 py-2" : "px-5 py-3.5",
+            isPending && "animate-shimmer"
+          )}
+        >
+          {hasInlineBadges
+            ? renderContentWithBadges(displayContent, inlineBadges, onUrlClick, onFileClick)
+            : (
+              <Markdown
+                mode="minimal"
+                onUrlClick={onUrlClick}
+                onFileClick={onFileClick}
+                className="text-sm [&_a]:underline [&_code]:bg-foreground/10 [&_p]:whitespace-pre-wrap"
+              >
+                {displayContent}
+              </Markdown>
+            )
+          }
+        </div>
+        {onEdit && !isPending && !isQueued && (
+          <button
+            onClick={onEdit}
+            className="absolute -left-8 top-1/2 -translate-y-1/2 opacity-0 group-hover/edit:opacity-100 transition-opacity p-1 rounded-[6px] hover:bg-foreground/10"
+            title="Edit message"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground">
+              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+              <path d="m15 5 4 4"/>
+            </svg>
+          </button>
         )}
-      >
-        {hasInlineBadges
-          ? renderContentWithBadges(displayContent, inlineBadges, onUrlClick, onFileClick)
-          : (
-            <Markdown
-              mode="minimal"
-              onUrlClick={onUrlClick}
-              onFileClick={onFileClick}
-              className="text-sm [&_a]:underline [&_code]:bg-foreground/10 [&_p]:whitespace-pre-wrap"
-            >
-              {displayContent}
-            </Markdown>
-          )
-        }
       </div>
 
       {/* Queued badge */}

@@ -34,6 +34,7 @@ import type {
   SessionUnsharedEvent,
   AuthRequestEvent,
   AuthCompletedEvent,
+  SessionResetToMessageEvent,
   UsageUpdateEvent,
 } from '../types'
 import type { Message } from '../../../shared/types'
@@ -750,6 +751,29 @@ export function handleAuthCompleted(
         messages: updatedMessages,
       },
       streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle session_reset_to_message - conversation was truncated and re-sent
+ * Replaces message array wholesale, clears streaming, and marks processing.
+ */
+export function handleSessionResetToMessage(
+  state: SessionState,
+  event: SessionResetToMessageEvent
+): ProcessResult {
+  const { session } = state
+
+  return {
+    state: {
+      session: {
+        ...session,
+        messages: event.messages,
+        isProcessing: true,
+      },
+      streaming: null,
     },
     effects: [],
   }

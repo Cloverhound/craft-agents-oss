@@ -376,6 +376,15 @@ export interface SourceActivatedEvent {
 }
 
 /**
+ * Session reset to message event - conversation was truncated and re-sent
+ */
+export interface SessionResetToMessageEvent {
+  type: 'session_reset_to_message'
+  sessionId: string
+  messages: import('../../shared/types').Message[]
+}
+
+/**
  * Usage update event - real-time context usage during processing
  * Allows UI to show growing context as agent processes, not just on complete
  */
@@ -426,6 +435,7 @@ export type AgentEvent =
   | AuthRequestEvent
   | AuthCompletedEvent
   | SourceActivatedEvent
+  | SessionResetToMessageEvent
   | UsageUpdateEvent
 
 /**

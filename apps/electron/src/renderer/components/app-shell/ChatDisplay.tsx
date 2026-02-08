@@ -47,6 +47,7 @@ import { MemoizedAuthRequestCard } from "@/components/chat/AuthRequestCard"
 import { ActiveOptionBadges } from "./ActiveOptionBadges"
 import { InputContainer, type StructuredInputState, type StructuredResponse, type PermissionResponse } from "./input"
 import type { RichTextInputHandle } from "@/components/ui/rich-text-input"
+import { FreeFormInput } from "./input/FreeFormInput"
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks"
 import { useTurnCardExpansion } from "@/hooks/useTurnCardExpansion"
 import type { SessionMeta } from "@/atoms/sessions"
@@ -179,6 +180,12 @@ interface ChatDisplayProps {
   placeholder?: string | string[]
   /** Label shown as empty state in compact mode (e.g., "Permission Settings") */
   emptyStateLabel?: string
+  /** Callback to edit and re-send a user message (resets conversation to that point) */
+  onResetToMessage?: (messageId: string, params: {
+    content: string
+    attachments?: FileAttachment[]
+    skillSlugs?: string[]
+  }) => void
 }
 
 /**
@@ -420,6 +427,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   compactMode = false,
   placeholder,
   emptyStateLabel,
+  onResetToMessage,
 }, ref) {
   // Input is only disabled when explicitly disabled (e.g., agent needs activation)
   // User can type during streaming - submitting will stop the stream and send
@@ -453,6 +461,54 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   const { tasks: backgroundTasks, killTask } = useBackgroundTasks({
     sessionId: session?.id ?? ''
   })
+
+  // Message editing state - track which message is being edited
+  const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null)
+  const [editContent, setEditContent] = React.useState('')
+  const [editAttachments, setEditAttachments] = React.useState<FileAttachment[]>([])
+  const editTextareaRef = React.useRef<RichTextInputHandle>(null)
+
+  // Handle starting edit mode for a message.
+  // If the content differs from the original message, auto-submit the reset
+  // (this happens when the old internal edit mode calls onEdit(editedContent) on Save).
+  // Otherwise, enter FreeFormInput edit mode for rich editing.
+  const handleStartEdit = useCallback((messageId: string, initialContent: string) => {
+    const originalMessage = session?.messages?.find(m => m.id === messageId)
+    if (originalMessage && initialContent !== originalMessage.content && onResetToMessage) {
+      // Content was already edited (old Save & Submit) - submit directly
+      onResetToMessage(messageId, { content: initialContent })
+      return
+    }
+    // Enter FreeFormInput edit mode
+    setEditingMessageId(messageId)
+    setEditContent(initialContent)
+    setEditAttachments([])
+    // Focus the edit input after state update
+    setTimeout(() => editTextareaRef.current?.focus(), 50)
+  }, [session?.messages, onResetToMessage])
+
+  // Handle canceling edit mode
+  const handleCancelEdit = useCallback(() => {
+    setEditingMessageId(null)
+    setEditContent('')
+    setEditAttachments([])
+  }, [])
+
+  // Handle submitting the edited message
+  const handleSubmitEdit = useCallback((message: string, attachments?: FileAttachment[], skillSlugs?: string[]) => {
+    if (!editingMessageId || !onResetToMessage) return
+
+    onResetToMessage(editingMessageId, {
+      content: message,
+      attachments,
+      skillSlugs,
+    })
+
+    // Clear edit state
+    setEditingMessageId(null)
+    setEditContent('')
+    setEditAttachments([])
+  }, [editingMessageId, onResetToMessage])
 
   // TurnCard expansion state — persisted to localStorage across session switches
   const {
@@ -1290,6 +1346,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                     // User turns - render with MemoizedMessageBubble
                     // Extra padding creates visual separation from AI responses
                     if (turn.type === 'user') {
+                      const isThisMessageBeingEdited = editingMessageId === turn.message.id
                       return (
                         <div
                           key={turnKey}
@@ -1306,6 +1363,20 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             onOpenFile={onOpenFile}
                             onOpenUrl={onOpenUrl}
                             compactMode={compactMode}
+                            onEditMessage={!session?.isProcessing ? handleStartEdit : undefined}
+                            isEditing={isThisMessageBeingEdited}
+                            editContent={isThisMessageBeingEdited ? editContent : undefined}
+                            onEditContentChange={isThisMessageBeingEdited ? setEditContent : undefined}
+                            editAttachments={isThisMessageBeingEdited ? editAttachments : undefined}
+                            onSubmitEdit={isThisMessageBeingEdited ? handleSubmitEdit : undefined}
+                            onCancelEdit={isThisMessageBeingEdited ? handleCancelEdit : undefined}
+                            editTextareaRef={isThisMessageBeingEdited ? editTextareaRef : undefined}
+                            sources={sources}
+                            skills={skills}
+                            workspaceId={workspaceId}
+                            currentModel={currentModel}
+                            onModelChange={onModelChange}
+                            sessionFolderPath={sessionFolderPath}
                           />
                         </div>
                       )
@@ -1738,6 +1809,34 @@ interface MessageBubbleProps {
   onPopOut?: (message: Message) => void
   /** Compact mode - reduces padding for popover embedding */
   compactMode?: boolean
+  /** Callback to edit and re-send a user message (resets conversation to that point) */
+  onEditMessage?: (messageId: string, initialContent: string) => void
+  /** Whether this message is currently being edited */
+  isEditing?: boolean
+  /** Content value when editing */
+  editContent?: string
+  /** Callback when edit content changes */
+  onEditContentChange?: (content: string) => void
+  /** Edit mode attachments */
+  editAttachments?: FileAttachment[]
+  /** Callback to submit edited message */
+  onSubmitEdit?: (message: string, attachments?: FileAttachment[], skillSlugs?: string[]) => void
+  /** Callback to cancel edit */
+  onCancelEdit?: () => void
+  /** Ref for edit textarea */
+  editTextareaRef?: React.RefObject<RichTextInputHandle>
+  /** Available sources for @ mentions */
+  sources?: LoadedSource[]
+  /** Available skills for @ mentions */
+  skills?: LoadedSkill[]
+  /** Workspace ID for mention parsing */
+  workspaceId?: string
+  /** Current model ID */
+  currentModel?: string
+  /** Model change callback */
+  onModelChange?: (model: string) => void
+  /** Session folder path for file picker */
+  sessionFolderPath?: string
 }
 
 /**
@@ -1797,9 +1896,53 @@ function MessageBubble({
   renderMode = 'minimal',
   onPopOut,
   compactMode,
+  onEditMessage,
+  isEditing,
+  editContent,
+  onEditContentChange,
+  editAttachments,
+  onSubmitEdit,
+  onCancelEdit,
+  editTextareaRef,
+  sources,
+  skills,
+  workspaceId,
+  currentModel,
+  onModelChange,
+  sessionFolderPath,
 }: MessageBubbleProps) {
   // === USER MESSAGE: Right-aligned bubble with attachments above ===
   if (message.role === 'user') {
+    // If editing, show FreeFormInput instead of UserMessageBubble
+    if (isEditing && onSubmitEdit && onCancelEdit && editContent !== undefined && onEditContentChange) {
+      return (
+        <div className="flex flex-col items-end gap-2 w-full">
+          <FreeFormInput
+            inputRef={editTextareaRef}
+            placeholder="Edit your message..."
+            inputValue={editContent}
+            onInputChange={onEditContentChange}
+            onSubmit={onSubmitEdit}
+            disabled={false}
+            isProcessing={false}
+            currentModel={currentModel || 'claude-sonnet-4-5-20250929'}
+            onModelChange={onModelChange || (() => {})}
+            sources={sources}
+            enabledSourceSlugs={sources?.map(s => s.config.slug)}
+            skills={skills}
+            workingDirectory={sessionFolderPath}
+          />
+          <button
+            onClick={onCancelEdit}
+            className="px-3 py-1.5 text-xs rounded-[8px] bg-foreground/5 hover:bg-foreground/10 transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      )
+    }
+
+    // Normal display mode
     return (
       <UserMessageBubble
         content={message.content}
@@ -1811,6 +1954,7 @@ function MessageBubble({
         onUrlClick={onOpenUrl}
         onFileClick={onOpenFile}
         compactMode={compactMode}
+        onEdit={onEditMessage ? (editedContent?: string) => onEditMessage(message.id, editedContent ?? message.content) : undefined}
       />
     )
   }
@@ -1940,11 +2084,20 @@ const MemoizedMessageBubble = React.memo(MessageBubble, (prev, next) => {
   if (prev.message.isStreaming || next.message.isStreaming) {
     return false
   }
+  // Always re-render if edit mode changed
+  if (prev.isEditing !== next.isEditing) {
+    return false
+  }
+  // Always re-render if editing and content changed
+  if (prev.isEditing && prev.editContent !== next.editContent) {
+    return false
+  }
   // Skip re-render if key props unchanged
   return (
     prev.message.id === next.message.id &&
     prev.message.content === next.message.content &&
     prev.message.role === next.message.role &&
-    prev.compactMode === next.compactMode
+    prev.compactMode === next.compactMode &&
+    prev.onEditMessage === next.onEditMessage
   )
 })

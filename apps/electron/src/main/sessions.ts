@@ -461,6 +461,8 @@ function messageToStored(msg: Message): StoredMessage {
     errorDetails: msg.errorDetails,
     errorOriginal: msg.errorOriginal,
     errorCanRetry: msg.errorCanRetry,
+    // SDK UUID (for edit/reset conversation support)
+    sdkUuid: msg.sdkUuid,
     // Ultrathink
     ultrathink: msg.ultrathink,
     // Auth request fields
@@ -511,6 +513,8 @@ function storedToMessage(stored: StoredMessage): Message {
     errorDetails: stored.errorDetails,
     errorOriginal: stored.errorOriginal,
     errorCanRetry: stored.errorCanRetry,
+    // SDK UUID (for edit/reset conversation support)
+    sdkUuid: stored.sdkUuid,
     // Ultrathink
     ultrathink: stored.ultrathink,
     // Auth request fields
@@ -1937,6 +1941,78 @@ export class SessionManager {
       end()
     }
     return managed.agent
+  }
+
+  /**
+   * Reset conversation to a specific user message, edit it, and re-send.
+   * Uses the SDK's resumeSessionAt to fork the transcript (preserves full context).
+   */
+  async resetToMessage(
+    sessionId: string,
+    messageId: string,
+    editedContent: string
+  ): Promise<boolean> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed || managed.isProcessing) {
+      sessionLog.info(`[resetToMessage] Failed: session ${!managed ? 'not found' : 'is processing'}`)
+      return false
+    }
+
+    // Ensure messages are loaded
+    await this.ensureMessagesLoaded(managed)
+
+    // 1. Find the target user message
+    const targetIndex = managed.messages.findIndex(m => m.id === messageId)
+    if (targetIndex === -1) {
+      sessionLog.info(`[resetToMessage] Failed: message ${messageId} not found`)
+      return false
+    }
+
+    // 2. Find the last assistant message before the target that has an sdkUuid
+    let sdkUuid: string | undefined
+    for (let i = targetIndex - 1; i >= 0; i--) {
+      if (managed.messages[i].role === 'assistant' && managed.messages[i].sdkUuid) {
+        sdkUuid = managed.messages[i].sdkUuid
+        break
+      }
+    }
+
+    // If no sdkUuid found (old session or first message), can't reset
+    if (!sdkUuid) {
+      sessionLog.info(`[resetToMessage] Failed: no sdkUuid found before target message`)
+      return false
+    }
+
+    // 3. Ensure agent is initialized (create if needed)
+    const agent = await this.getOrCreateAgent(managed)
+
+    // 4. Tell the agent to resume from that point on next chat()
+    agent.prepareResetToMessage(sdkUuid)
+
+    // 5. Truncate in-memory messages
+    managed.messages = managed.messages.slice(0, targetIndex)
+
+    // 6. Zero token usage (SDK will report fresh usage on next turn)
+    managed.tokenUsage = {
+      inputTokens: 0, outputTokens: 0,
+      totalTokens: 0, contextTokens: 0, costUsd: 0,
+    }
+
+    // 7. Persist truncated state
+    this.persistSession(managed)
+    await this.flushSession(managed.id)
+
+    // 8. Emit event to renderer so UI truncates immediately
+    this.sendEvent({
+      type: 'session_reset_to_message',
+      sessionId,
+      messages: managed.messages,
+    } as SessionEvent, managed.workspace.id)
+
+    // 9. Send the edited message (normal sendMessage flow)
+    await this.sendMessage(sessionId, editedContent)
+
+    return true
   }
 
   async flagSession(sessionId: string): Promise<void> {
@@ -3372,6 +3448,7 @@ To view this task's output:
           isIntermediate: event.isIntermediate,
           turnId: event.turnId,
           parentToolUseId: textParentToolUseId,
+          sdkUuid: event.sdkUuid,
         }
         managed.messages.push(assistantMessage)
         managed.streamingText = ''

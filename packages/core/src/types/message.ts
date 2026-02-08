@@ -177,6 +177,8 @@ export interface Message {
   errorDetails?: string[];
   errorOriginal?: string;
   errorCanRetry?: boolean;
+  // SDK message UUID - used to resume/fork the SDK transcript at this point
+  sdkUuid?: string;
   // Ultrathink mode - indicates this user message was sent with extended thinking
   ultrathink?: boolean;
   // Plan-specific fields (for role='plan')
@@ -247,6 +249,8 @@ export interface StoredMessage {
   errorDetails?: string[];
   errorOriginal?: string;
   errorCanRetry?: boolean;
+  // SDK message UUID - used to resume/fork the SDK transcript at this point
+  sdkUuid?: string;
   // Ultrathink mode - indicates this user message was sent with extended thinking
   ultrathink?: boolean;
   // Plan-specific fields (for role='plan')
@@ -379,7 +383,7 @@ export type AgentEvent =
   | { type: 'status'; message: string }
   | { type: 'info'; message: string }
   | { type: 'text_delta'; text: string; turnId?: string; parentToolUseId?: string }
-  | { type: 'text_complete'; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string }
+  | { type: 'text_complete'; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string; sdkUuid?: string }
   | { type: 'tool_start'; toolName: string; toolUseId: string; input: Record<string, unknown>; intent?: string; displayName?: string; turnId?: string; parentToolUseId?: string; toolDisplayMeta?: ToolDisplayMeta }
   | { type: 'tool_result'; toolUseId: string; toolName?: string; result: string; isError: boolean; input?: Record<string, unknown>; turnId?: string; parentToolUseId?: string }
   | { type: 'permission_request'; requestId: string; toolName: string; command: string; description: string }

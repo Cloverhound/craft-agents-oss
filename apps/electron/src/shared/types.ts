@@ -450,6 +450,8 @@ export type SessionEvent =
   | { type: 'auth_completed'; sessionId: string; requestId: string; success: boolean; cancelled?: boolean; error?: string }
   // Source activation events (for auto-retry on mid-turn activation)
   | { type: 'source_activated'; sessionId: string; sourceSlug: string; originalMessage: string }
+  // Reset conversation to a specific message (edit & re-send)
+  | { type: 'session_reset_to_message'; sessionId: string; messages: CoreMessage[] }
   // Real-time usage update during processing (for context display)
   | { type: 'usage_update'; sessionId: string; tokenUsage: { inputTokens: number; contextWindow?: number } }
 
@@ -496,6 +498,7 @@ export type SessionCommand =
   | { type: 'setPendingPlanExecution'; planPath: string }
   | { type: 'markCompactionComplete' }
   | { type: 'clearPendingPlanExecution' }
+  | { type: 'resetToMessage'; messageId: string; editedContent: string }
 
 /**
  * Parameters for opening a new chat session

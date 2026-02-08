@@ -426,6 +426,9 @@ export class CraftAgent {
   // Persistent session runner - maintains SDK subprocess between messages
   // Background tasks survive across messages when using streaming input mode
   private sessionRunner: SessionRunner | null = null;
+  // Pending resumeAt target for edit/reset conversation flow
+  // When set, the next chat() call uses resumeSessionAt + forkSession
+  private pendingResumeAt: string | null = null;
 
   // Heartbeat manager - tracks activity for multi-instance detection
   private heartbeatManager: HeartbeatManager | null = null;
@@ -651,6 +654,25 @@ export class CraftAgent {
   }
 
   /**
+   * Prepare the agent to resume from a specific point in the conversation.
+   * The next chat() call will use resumeSessionAt + forkSession to branch
+   * the SDK transcript from the given assistant message UUID.
+   */
+  prepareResetToMessage(sdkUuid: string): void {
+    // Stop current SessionRunner (will be recreated on next chat())
+    this.forceStopSessionRunner();
+    this.stopHeartbeatManager();
+    this.clearStreamHealthStallTimer();
+
+    // Store the target UUID — buildSessionOptions() will pick it up
+    this.pendingResumeAt = sdkUuid;
+
+    // Clear pinned state for fresh start
+    this.pinnedPreferencesPrompt = null;
+    this.preferencesDriftNotified = false;
+  }
+
+  /**
    * Check if another instance is actively using this session.
    * Returns a warning message if so, null otherwise.
    */
@@ -782,6 +804,11 @@ export class CraftAgent {
       hooks: this.buildHooks(sessionId),
       // Resume from existing session if we have one and not skipping resume
       ...(!opts?.skipResume && this.sessionId ? { resume: this.sessionId } : {}),
+      // Fork from a specific point in the transcript (for edit/reset conversation)
+      ...(this.pendingResumeAt ? {
+        resumeSessionAt: this.pendingResumeAt,
+        forkSession: true,
+      } : {}),
       // Abort controller for cancellation
       ...(opts?.abortController ? { abortController: opts.abortController } : {}),
       mcpServers,
@@ -2422,6 +2449,7 @@ export class CraftAgent {
       let receivedComplete = false;
       // Track text waiting for stop_reason from message_delta
       let pendingTextForStopReason: string | null = null;
+      let pendingUuidForStopReason: string | null = null;
       // Track current turn ID from message_start (correlation ID for grouping events)
       let currentTurnId: string | null = null;
       // Track whether we received any assistant content (for empty response detection)
@@ -2487,6 +2515,11 @@ export class CraftAgent {
             this.config.onSdkSessionIdUpdate?.(message.session_id);
           }
 
+          // Clear pendingResumeAt after the first message from SDK (fork succeeded)
+          if (this.pendingResumeAt) {
+            this.pendingResumeAt = null;
+          }
+
           const events = await this.convertSDKMessage(
             message,
             toolIndex,
@@ -2495,7 +2528,9 @@ export class CraftAgent {
             pendingTextForStopReason,
             (text) => { pendingTextForStopReason = text; },
             currentTurnId,
-            (id) => { currentTurnId = id; }
+            (id) => { currentTurnId = id; },
+            pendingUuidForStopReason,
+            (uuid) => { pendingUuidForStopReason = uuid; }
           );
           for (const event of events) {
             // Check for tool-not-found errors on inactive sources and attempt auto-activation
@@ -3551,7 +3586,9 @@ Please continue the conversation naturally from where we left off.
     pendingText: string | null,
     setPendingText: (text: string | null) => void,
     turnId: string | null,
-    setTurnId: (id: string | null) => void
+    setTurnId: (id: string | null) => void,
+    pendingUuid: string | null,
+    setPendingUuid: (uuid: string | null) => void
   ): Promise<AgentEvent[]> {
     const events: AgentEvent[] = [];
 
@@ -3648,6 +3685,12 @@ Please continue the conversation naturally from where we left off.
           // The assistant message arrives with stop_reason: null during streaming
           // The actual stop_reason comes in the message_delta event
           setPendingText(textContent);
+          // Capture the SDK's message UUID for edit/reset support
+          // The UUID identifies this assistant turn in the SDK transcript
+          const sdkMsgUuid = 'uuid' in message ? (message as any).uuid as string : undefined;
+          if (sdkMsgUuid) {
+            setPendingUuid(sdkMsgUuid);
+          }
         }
         break;
       }
@@ -3674,8 +3717,9 @@ Please continue the conversation naturally from where we left off.
             const isIntermediate = stopReason === 'tool_use';
             // SDK's parent_tool_use_id identifies the subagent context for this text
             // (null = main agent, Task ID = inside subagent)
-            events.push({ type: 'text_complete', text: pendingText, isIntermediate, turnId: turnId || undefined, parentToolUseId: message.parent_tool_use_id || undefined });
+            events.push({ type: 'text_complete', text: pendingText, isIntermediate, turnId: turnId || undefined, parentToolUseId: message.parent_tool_use_id || undefined, sdkUuid: pendingUuid || undefined });
             setPendingText(null);
+            setPendingUuid(null);
           }
         }
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {

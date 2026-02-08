@@ -21,6 +21,7 @@ import { rendererPerf } from '@/lib/perf'
 import { routes } from '@/lib/navigate'
 import { ensureSessionMessagesLoadedAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
+import type { FileAttachment } from '../../shared/types'
 
 export interface ChatPageProps {
   sessionId: string
@@ -176,6 +177,15 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   const handleWorkingDirectoryChange = React.useCallback(async (path: string) => {
     if (!session) return
     await window.electronAPI.sessionCommand(session.id, { type: 'updateWorkingDirectory', dir: path })
+  }, [session])
+
+  const handleResetToMessage = React.useCallback(async (
+    messageId: string,
+    params: { content: string; attachments?: FileAttachment[]; skillSlugs?: string[] }
+  ) => {
+    if (!session) return
+    // For now, just pass the content - the IPC handler can be enhanced later to support attachments and skill slugs
+    await window.electronAPI.sessionCommand(session.id, { type: 'resetToMessage', messageId, editedContent: params.content })
   }, [session])
 
   const handleOpenFile = React.useCallback(
@@ -555,6 +565,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             searchQuery={sessionListSearchQuery}
             isSearchModeActive={isSearchModeActive}
             onMatchInfoChange={onChatMatchInfoChange}
+            onResetToMessage={handleResetToMessage}
           />
         </div>
       </div>
