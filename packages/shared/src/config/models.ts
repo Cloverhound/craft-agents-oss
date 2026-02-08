@@ -3,11 +3,14 @@
  * Update model IDs here when new versions are released.
  */
 
+import type { ProviderType } from '../agent/providers/types.ts';
+
 export interface ModelDefinition {
   id: string;
   name: string;
   shortName: string;
   description: string;
+  provider: ProviderType;
   /** Known context window size in tokens (used as fallback before SDK reports usage) */
   contextWindow?: number;
 }
@@ -16,10 +19,21 @@ export interface ModelDefinition {
 // USER-SELECTABLE MODELS (shown in UI)
 // ============================================
 
+export const CLAUDE_MODELS: ModelDefinition[] = [
+  { id: 'claude-opus-4-6', name: 'Opus 4.6', shortName: 'Opus', description: 'Most capable', provider: 'claude', contextWindow: 200000 },
+  { id: 'claude-sonnet-4-5-20250929', name: 'Sonnet 4.5', shortName: 'Sonnet', description: 'Balanced', provider: 'claude', contextWindow: 200000 },
+  { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', shortName: 'Haiku', description: 'Fast & efficient', provider: 'claude', contextWindow: 200000 },
+];
+
+export const CODEX_MODELS: ModelDefinition[] = [
+  { id: 'codex-1', name: 'Codex 1', shortName: 'Codex', description: 'OpenAI Codex agent', provider: 'codex', contextWindow: 192000 },
+  { id: 'gpt-4.1', name: 'GPT-4.1', shortName: 'GPT-4.1', description: 'General-purpose', provider: 'codex', contextWindow: 1048576 },
+  { id: 'o3', name: 'o3', shortName: 'o3', description: 'Reasoning model', provider: 'codex', contextWindow: 200000 },
+];
+
 export const MODELS: ModelDefinition[] = [
-  { id: 'claude-opus-4-6', name: 'Opus 4.6', shortName: 'Opus', description: 'Most capable', contextWindow: 200000 },
-  { id: 'claude-sonnet-4-5-20250929', name: 'Sonnet 4.5', shortName: 'Sonnet', description: 'Balanced', contextWindow: 200000 },
-  { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', shortName: 'Haiku', description: 'Fast & efficient', contextWindow: 200000 },
+  ...CLAUDE_MODELS,
+  ...CODEX_MODELS,
 ];
 
 // ============================================
@@ -82,4 +96,18 @@ export function isOpusModel(modelId: string): boolean {
 export function isClaudeModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   return lower.startsWith('claude-') || lower.includes('/claude');
+}
+
+export function isCodexModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return lower.startsWith('codex-') || lower.startsWith('gpt-') || lower === 'o3' || lower.includes('/codex');
+}
+
+export function getModelsForProvider(provider: ProviderType): ModelDefinition[] {
+  return MODELS.filter(m => m.provider === provider);
+}
+
+export function detectProviderFromModel(modelId: string): ProviderType {
+  if (isCodexModel(modelId)) return 'codex';
+  return 'claude';
 }

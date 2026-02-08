@@ -1,9 +1,10 @@
 import { createSdkMcpServer, tool, AbortError, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { resetClaudeConfigCheck } from './options.ts';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
-import { ClaudeAgent, ForceStopError as ProviderForceStopError } from './providers/claude/claude-agent.ts';
+import { ForceStopError as ProviderForceStopError } from './providers/claude/claude-agent.ts';
 import { detectInactiveSourceToolError, ToolIndex, buildWindowsSkillsDirError } from './providers/claude/event-normalizer.ts';
-import type { ChatExecutionConfig, MessageDelivery } from './providers/types.ts';
+import type { AgentProvider, ChatExecutionConfig, MessageDelivery, ProviderType } from './providers/types.ts';
+import { createProvider } from './providers/factory.ts';
 import { z } from 'zod';
 import { getSystemPrompt, getDateTimeContext, getWorkingDirectoryContext } from '../prompts/system.ts';
 // Plan types are used by UI components; not needed in craft-agent.ts since Safe Mode is user-controlled
@@ -12,7 +13,7 @@ import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, getAnthropicBaseUrl, resolveModelId, type Workspace } from '../config/storage.ts';
 import { isLocalMcpEnabled, generateSlug } from '../workspaces/storage.ts';
 import { loadPlanFromPath, type SessionConfig as Session } from '../sessions/storage.ts';
-import { DEFAULT_MODEL, isClaudeModel } from '../config/models.ts';
+import { DEFAULT_MODEL } from '../config/models.ts';
 import { getCredentialManager } from '../credentials/index.ts';
 import { updatePreferences, loadPreferences, formatPreferencesForPrompt, type UserPreferences } from '../config/preferences.ts';
 import type { FileAttachment } from '../utils/files.ts';
@@ -112,6 +113,7 @@ export interface CraftAgentConfig {
   workspace: Workspace;
   session?: Session;           // Current session (primary isolation boundary)
   mcpToken?: string;           // Override token (for testing)
+  provider?: ProviderType;     // Provider to use (defaults to 'claude')
   model?: string;
   thinkingLevel?: ThinkingLevel; // Initial thinking level (defaults to 'think')
   onSdkSessionIdUpdate?: (sdkSessionId: string) => void;  // Callback when SDK session ID is captured
@@ -328,7 +330,7 @@ export type SdkMcpServerConfig =
 
 export class CraftAgent {
   private config: CraftAgentConfig;
-  private provider: ClaudeAgent;
+  private provider: AgentProvider;
   private lastAbortReason: AbortReason | null = null;
   private sessionId: string | null = null;
   private isHeadless: boolean = false;
@@ -439,7 +441,7 @@ export class CraftAgent {
     this.config = { ...config, model };
     this.isHeadless = config.isHeadless ?? false;
 
-    this.provider = new ClaudeAgent();
+    this.provider = createProvider(config.provider ?? "claude");
 
     // Log which model is being used (helpful for debugging custom models)
     debug(`[CraftAgent] Using model: ${model}`);
@@ -1397,7 +1399,7 @@ export class CraftAgent {
 
       // Build MCP servers configuration
       const sourceMcpResult = this.getSourceMcpServersFiltered();
-      const mcpServers: Options['mcpServers'] = isMiniAgent
+      const mcpServers = isMiniAgent
         ? {
             session: getSessionScopedTools(sessionId, this.workspaceRootPath),
             'craft-agents-docs': {
@@ -1416,17 +1418,12 @@ export class CraftAgent {
             ...this.sourceApiServers,
           };
 
-      // Detect if resolved model is Claude — non-Claude models (via OpenRouter/Ollama) don't
-      // support Anthropic-specific betas or extended thinking parameters
-      const isClaude = isClaudeModel(model);
-      const useAnthropicBetas = isClaude;
-
       if (isMiniAgent) {
         debug("[CraftAgent] Mini agent mode - optimized for quick config edits");
       }
 
       // Build system prompt (pinned preferences for consistency after compaction)
-      const systemPrompt: Options["systemPrompt"] = this.config.systemPromptPreset === "mini"
+      const systemPrompt = this.config.systemPromptPreset === "mini"
         ? getSystemPrompt(undefined, undefined, this.workspaceRootPath, undefined, "mini")
         : {
             type: "preset" as const,
@@ -1470,10 +1467,10 @@ export class CraftAgent {
         delivery,
         model,
         modelConfig,
-        isClaude,
         isMiniAgent,
         thinkingLevel: effectiveThinkingLevel,
         ultrathink: this.ultrathinkOverride,
+        permissionMode: getPermissionMode(sessionId),
         mcpServers,
         systemPrompt,
         sessionId,
@@ -1619,7 +1616,7 @@ export class CraftAgent {
           // Stream health auto-recovery: if the watchdog triggered forceStop (not a
           // user/plan/redirect abort), clean up the dead session and auto-retry.
           // The _isRetry guard prevents infinite loops.
-          if (this.provider.getStreamHealthTriggered() && !_isRetry) {
+          if (this.provider.getStreamHealthTriggered?.() && !_isRetry) {
             debug('[StreamHealth] Auto-recovery: clearing dead session and retrying');
             // Clean up dead session state
             this.sessionId = null;
@@ -1739,7 +1736,7 @@ export class CraftAgent {
         //   1. "CLI output was not valid JSON" — CLI wrote plain-text error to stdout
         //   2. "process exited with code 1" with stderr mentioning config corruption
         // See: claude-code#14442 (BOM), #2593 (empty file), #18998 (race condition)
-        const stderrForConfigCheck = this.provider.getLastStderrOutput().join('\n').toLowerCase();
+        const stderrForConfigCheck = (this.provider.getLastStderrOutput?.() ?? []).join('\n').toLowerCase();
         const isConfigCorruption =
           (errorMsg.includes('not valid json') && (errorMsg.includes('claude') || errorMsg.includes('configuration'))) ||
           (errorMsg.includes('process exited with code') && (
@@ -1770,13 +1767,14 @@ export class CraftAgent {
         debug('[SESSION_DEBUG] wasResuming:', wasResuming);
         debug('[SESSION_DEBUG] _isRetry:', _isRetry);
         debug('[SESSION_DEBUG] this.sessionId:', this.sessionId);
-        debug('[SESSION_DEBUG] lastStderrOutput length:', this.provider.getLastStderrOutput().length);
-        debug('[SESSION_DEBUG] lastStderrOutput:', this.provider.getLastStderrOutput().join('\n'));
+        debug('[SESSION_DEBUG] lastStderrOutput length:', (this.provider.getLastStderrOutput?.() ?? []).length);
+        debug('[SESSION_DEBUG] lastStderrOutput:', (this.provider.getLastStderrOutput?.() ?? []).join('\n'));
 
         if (isProcessError) {
           // Include captured stderr in diagnostics - this is often where the real error is
-          const stderrContext = this.provider.getLastStderrOutput().length > 0
-            ? this.provider.getLastStderrOutput().join('\n')
+          const lastStderr = this.provider.getLastStderrOutput?.() ?? [];
+          const stderrContext = lastStderr.length > 0
+            ? lastStderr.join('\n')
             : undefined;
           if (stderrContext) {
             debug('[SDK process error] Captured stderr:', stderrContext);

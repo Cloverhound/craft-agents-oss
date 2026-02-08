@@ -1,13 +1,14 @@
 /**
  * Provider Abstraction Tests
  *
- * Validates the provider factory, ClaudeAgent implementation, and event normalizer
- * functions extracted during Phase 1 of the multi-provider refactoring.
+ * Validates the provider factory, ClaudeAgent implementation, CodexAgent implementation,
+ * and event normalizer functions from the multi-provider refactoring.
  */
 
 import { describe, it, expect } from "bun:test";
 import { createProvider, getSupportedProviders, getProviderDisplayName } from "../providers/factory.ts";
 import { ClaudeAgent } from "../providers/claude/claude-agent.ts";
+import { CodexAgent } from "../providers/codex/codex-agent.ts";
 import {
   mapSDKErrorToTypedError,
   buildWindowsSkillsDirError,
@@ -23,17 +24,20 @@ describe("Provider Factory", () => {
     expect(provider.type).toBe("claude");
   });
 
-  it("throws for unsupported 'codex' type", () => {
-    expect(() => createProvider("codex")).toThrow("not yet implemented");
+  it("creates a CodexAgent for 'codex' type", () => {
+    const provider = createProvider("codex");
+    expect(provider).toBeInstanceOf(CodexAgent);
+    expect(provider.type).toBe("codex");
   });
 
   it("throws for unknown type", () => {
     expect(() => createProvider("unknown" as ProviderType)).toThrow("Unknown provider type");
   });
 
-  it("getSupportedProviders returns claude", () => {
+  it("getSupportedProviders returns both providers", () => {
     const supported = getSupportedProviders();
-    expect(supported).toEqual(["claude"]);
+    expect(supported).toContain("claude");
+    expect(supported).toContain("codex");
   });
 
   it("getProviderDisplayName returns human-readable names", () => {

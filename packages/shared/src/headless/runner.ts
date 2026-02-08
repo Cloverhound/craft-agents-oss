@@ -194,9 +194,9 @@ ${this.config.prompt}
 
     const agentConfig: CraftAgentConfig = {
       workspace: this.config.workspace,
+      provider: this.config.provider,
       model: this.config.model,
       isHeadless: true,
-      // Create a minimal session config with the permission mode
       session: {
         id: `headless-${Date.now()}`,
         workspaceRootPath: this.config.workspace.rootPath,

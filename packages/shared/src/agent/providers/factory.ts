@@ -1,19 +1,20 @@
 import type { AgentProvider, ProviderType } from "./types.ts";
 import { ClaudeAgent } from "./claude/claude-agent.ts";
+import { CodexAgent } from "./codex/codex-agent.ts";
 
 export function createProvider(type: ProviderType): AgentProvider {
   switch (type) {
     case "claude":
       return new ClaudeAgent();
     case "codex":
-      throw new Error("Codex provider is not yet implemented (Phase 2)");
+      return new CodexAgent();
     default:
       throw new Error(`Unknown provider type: ${type}`);
   }
 }
 
 export function getSupportedProviders(): ProviderType[] {
-  return ["claude"];
+  return ["claude", "codex"];
 }
 
 export function getProviderDisplayName(type: ProviderType): string {

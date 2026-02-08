@@ -8,7 +8,7 @@
  * CraftAgent (the orchestrator) delegates SDK work here via executeChat().
  */
 
-import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent } from "@craft-agent/core/types";
 import type { AgentProvider, ChatExecutionConfig, ProviderFeature } from "../types.ts";
 import { SessionRunner, ForceStopError } from "../../session-runner.ts";
@@ -239,7 +239,7 @@ export class ClaudeAgent implements AgentProvider {
       },
       ...(useAnthropicBetas ? { betas: ["advanced-tool-use-2025-11-20"] as any } : {}),
       maxThinkingTokens: config.isMiniAgent ? 0 : (isClaude ? thinkingTokens : 0),
-      systemPrompt: config.systemPrompt,
+      systemPrompt: config.systemPrompt as Options["systemPrompt"],
       cwd: config.sdkCwd,
       includePartialMessages: true,
       tools: config.isMiniAgent
@@ -247,13 +247,13 @@ export class ClaudeAgent implements AgentProvider {
         : { type: "preset" as const, preset: "claude_code" as const },
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
-      hooks: config.hooks,
+      hooks: config.hooks as Options["hooks"],
       ...(!config.isRetry && config.resumeSessionId ? { resume: config.resumeSessionId } : {}),
       ...(config.pendingResumeAt ? {
         resumeSessionAt: config.pendingResumeAt,
         forkSession: true,
       } : {}),
-      mcpServers: config.mcpServers,
+      mcpServers: config.mcpServers as Options["mcpServers"],
       canUseTool: async (_toolName, input) => {
         return { behavior: "allow" as const, updatedInput: input as Record<string, unknown> };
       },
@@ -306,7 +306,7 @@ export class ClaudeAgent implements AgentProvider {
         runner.sendText(config.delivery.text);
         break;
       case "sdk_message":
-        runner.send(config.delivery.sdkMessage);
+        runner.send(config.delivery.sdkMessage as SDKUserMessage);
         break;
       case "text":
         runner.sendText(config.delivery.text);

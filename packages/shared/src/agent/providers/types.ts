@@ -1,5 +1,4 @@
 import type { AgentEvent } from "@craft-agent/core/types";
-import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ThinkingLevel } from "../thinking-levels.ts";
 
 export type ProviderType = "claude" | "codex";
@@ -26,11 +25,22 @@ export interface AgentProvider {
   setSessionId(id: string | null): void;
 
   getSdkTools(): string[];
+
+  getLastStderrOutput?(): string[];
+  getStreamHealthTriggered?(): boolean;
 }
+
+export type ProviderMcpServers = Record<string, unknown>;
+
+export type ProviderSystemPrompt = string | Record<string, unknown>;
+
+export type ProviderHooks = unknown;
+
+export type ProviderMessage = unknown;
 
 export type MessageDelivery =
   | { mode: "text"; text: string }
-  | { mode: "sdk_message"; sdkMessage: SDKUserMessage }
+  | { mode: "sdk_message"; sdkMessage: ProviderMessage }
   | { mode: "slash_command"; text: string };
 
 export interface ChatExecutionConfig {
@@ -38,13 +48,13 @@ export interface ChatExecutionConfig {
 
   model: string;
   modelConfig: string;
-  isClaude: boolean;
   isMiniAgent: boolean;
   thinkingLevel: ThinkingLevel;
   ultrathink: boolean;
+  permissionMode?: string;
 
-  mcpServers: Options["mcpServers"];
-  systemPrompt: Options["systemPrompt"];
+  mcpServers: ProviderMcpServers;
+  systemPrompt: ProviderSystemPrompt;
 
   sessionId: string;
   sdkCwd: string;
@@ -52,7 +62,7 @@ export interface ChatExecutionConfig {
   pendingResumeAt: string | null;
   isRetry: boolean;
 
-  hooks: Options["hooks"];
+  hooks: ProviderHooks;
 
   workspaceRootPath: string;
   disallowedTools: string[];
