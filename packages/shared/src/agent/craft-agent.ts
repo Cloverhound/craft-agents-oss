@@ -10,7 +10,7 @@ import { getSystemPrompt, getDateTimeContext, getWorkingDirectoryContext } from 
 import { parseError, type AgentError } from './errors.ts';
 import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, getAnthropicBaseUrl, resolveModelId, type Workspace } from '../config/storage.ts';
-import { isLocalMcpEnabled } from '../workspaces/storage.ts';
+import { isLocalMcpEnabled, generateSlug } from '../workspaces/storage.ts';
 import { loadPlanFromPath, type SessionConfig as Session } from '../sessions/storage.ts';
 import { DEFAULT_MODEL, isClaudeModel } from '../config/models.ts';
 import { getCredentialManager } from '../credentials/index.ts';
@@ -879,8 +879,8 @@ export class CraftAgent {
               this.onDebug?.(`Skill invoked, permissions activated: ${skillSlug}`);
 
               if (!toolInput.skill.includes(':')) {
-                const workspaceId = this.config.workspace.id;
-                const qualifiedSkill = `${workspaceId}:${toolInput.skill}`;
+                const pluginName = generateSlug(this.config.workspace.name);
+                const qualifiedSkill = `${pluginName}:${toolInput.skill}`;
                 this.onDebug?.(`Skill tool: qualified "${toolInput.skill}" → "${qualifiedSkill}"`);
                 return {
                   continue: true,

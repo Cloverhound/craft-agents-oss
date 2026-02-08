@@ -509,9 +509,12 @@ export function ensurePluginManifest(rootPath: string, workspaceName: string): v
     mkdirSync(pluginDir, { recursive: true });
   }
 
+  // Generate slug from workspace name (e.g., "My Workspace" → "my-workspace")
+  const slug = generateSlug(workspaceName);
+
   // Create minimal plugin manifest
   const manifest = {
-    name: `craft-workspace-${workspaceName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    name: slug,
     version: '1.0.0',
   };
 
