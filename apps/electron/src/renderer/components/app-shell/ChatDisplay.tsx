@@ -473,19 +473,13 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   // (this happens when the old internal edit mode calls onEdit(editedContent) on Save).
   // Otherwise, enter FreeFormInput edit mode for rich editing.
   const handleStartEdit = useCallback((messageId: string, initialContent: string) => {
-    const originalMessage = session?.messages?.find(m => m.id === messageId)
-    if (originalMessage && initialContent !== originalMessage.content && onResetToMessage) {
-      // Content was already edited (old Save & Submit) - submit directly
-      onResetToMessage(messageId, { content: initialContent })
-      return
-    }
     // Enter FreeFormInput edit mode
     setEditingMessageId(messageId)
     setEditContent(initialContent)
     setEditAttachments([])
     // Focus the edit input after state update
     setTimeout(() => editTextareaRef.current?.focus(), 50)
-  }, [session?.messages, onResetToMessage])
+  }, [])
 
   // Handle canceling edit mode
   const handleCancelEdit = useCallback(() => {
@@ -1377,6 +1371,10 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             currentModel={currentModel}
                             onModelChange={onModelChange}
                             sessionFolderPath={sessionFolderPath}
+                            onSourcesChange={onSourcesChange}
+                            onWorkingDirectoryChange={onWorkingDirectoryChange}
+                            workingDirectory={workingDirectory}
+                            enabledSourceSlugs={session.enabledSourceSlugs}
                           />
                         </div>
                       )
@@ -1837,6 +1835,14 @@ interface MessageBubbleProps {
   onModelChange?: (model: string) => void
   /** Session folder path for file picker */
   sessionFolderPath?: string
+  /** Callback when source selection changes */
+  onSourcesChange?: (slugs: string[]) => void
+  /** Callback when working directory changes */
+  onWorkingDirectoryChange?: (path: string) => void
+  /** Current working directory */
+  workingDirectory?: string
+  /** Enabled source slugs for edit mode */
+  enabledSourceSlugs?: string[]
 }
 
 /**
@@ -1910,13 +1916,17 @@ function MessageBubble({
   currentModel,
   onModelChange,
   sessionFolderPath,
+  onSourcesChange,
+  onWorkingDirectoryChange,
+  workingDirectory,
+  enabledSourceSlugs,
 }: MessageBubbleProps) {
   // === USER MESSAGE: Right-aligned bubble with attachments above ===
   if (message.role === 'user') {
-    // If editing, show FreeFormInput instead of UserMessageBubble
+    // If editing, show FreeFormInput at full width for better readability
     if (isEditing && onSubmitEdit && onCancelEdit && editContent !== undefined && onEditContentChange) {
       return (
-        <div className="flex flex-col items-end gap-2 w-full">
+        <div className="flex flex-col gap-2 w-full">
           <FreeFormInput
             inputRef={editTextareaRef}
             placeholder="Edit your message..."
@@ -1928,16 +1938,21 @@ function MessageBubble({
             currentModel={currentModel || 'claude-sonnet-4-5-20250929'}
             onModelChange={onModelChange || (() => {})}
             sources={sources}
-            enabledSourceSlugs={sources?.map(s => s.config.slug)}
+            enabledSourceSlugs={enabledSourceSlugs}
+            onSourcesChange={onSourcesChange}
             skills={skills}
-            workingDirectory={sessionFolderPath}
+            workingDirectory={workingDirectory}
+            onWorkingDirectoryChange={onWorkingDirectoryChange}
+            sessionFolderPath={sessionFolderPath}
           />
-          <button
-            onClick={onCancelEdit}
-            className="px-3 py-1.5 text-xs rounded-[8px] bg-foreground/5 hover:bg-foreground/10 transition-colors"
-          >
-            Cancel
-          </button>
+          <div className="flex justify-end">
+            <button
+              onClick={onCancelEdit}
+              className="px-3 py-1.5 text-xs rounded-[8px] bg-foreground/5 hover:bg-foreground/10 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )
     }
@@ -1954,7 +1969,7 @@ function MessageBubble({
         onUrlClick={onOpenUrl}
         onFileClick={onOpenFile}
         compactMode={compactMode}
-        onEdit={onEditMessage ? (editedContent?: string) => onEditMessage(message.id, editedContent ?? message.content) : undefined}
+        onEdit={onEditMessage ? () => onEditMessage(message.id, message.content) : undefined}
       />
     )
   }

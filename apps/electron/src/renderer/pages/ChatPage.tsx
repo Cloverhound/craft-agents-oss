@@ -185,7 +185,13 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   ) => {
     if (!session) return
     // For now, just pass the content - the IPC handler can be enhanced later to support attachments and skill slugs
-    await window.electronAPI.sessionCommand(session.id, { type: 'resetToMessage', messageId, editedContent: params.content })
+    // Ensure we only pass serializable data through IPC
+    const command = {
+      type: 'resetToMessage' as const,
+      messageId: String(messageId),
+      editedContent: String(params.content)
+    }
+    await window.electronAPI.sessionCommand(session.id, command)
   }, [session])
 
   const handleOpenFile = React.useCallback(
