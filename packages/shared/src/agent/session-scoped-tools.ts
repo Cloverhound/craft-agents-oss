@@ -592,23 +592,48 @@ Checks:
     async (args) => {
       debug('[skill_validate] Validating skill:', args.skillSlug);
 
-      try {
-        const result = validateSkill(workspaceRoot, args.skillSlug);
+      // Timeout guard: prevent tool from hanging indefinitely if filesystem
+      // or validation logic stalls (see: session hang bug where tool_result
+      // was never emitted, leaving the chat generator stuck forever).
+      const TOOL_TIMEOUT_MS = 30_000;
 
-        // Also validate permissions.json if present
-        const permResult = validateSkillPermissions(workspaceRoot, args.skillSlug);
-        // Merge errors (skip "does not exist" warnings — permissions.json is optional)
-        result.errors.push(...permResult.errors);
-        for (const w of permResult.warnings) {
-          if (!w.message.includes('does not exist')) {
-            result.warnings.push(w);
+      const validationPromise = new Promise<{ formatted: string }>((resolve, reject) => {
+        try {
+          debug('[skill_validate] Starting validateSkill');
+          const result = validateSkill(workspaceRoot, args.skillSlug);
+          debug('[skill_validate] validateSkill complete');
+
+          // Also validate permissions.json if present
+          debug('[skill_validate] Starting validateSkillPermissions');
+          const permResult = validateSkillPermissions(workspaceRoot, args.skillSlug);
+          debug('[skill_validate] validateSkillPermissions complete');
+
+          // Merge errors (skip "does not exist" warnings — permissions.json is optional)
+          result.errors.push(...permResult.errors);
+          for (const w of permResult.warnings) {
+            if (!w.message.includes('does not exist')) {
+              result.warnings.push(w);
+            }
           }
-        }
-        if (permResult.errors.length > 0) {
-          result.valid = false;
-        }
+          if (permResult.errors.length > 0) {
+            result.valid = false;
+          }
 
-        const formatted = formatValidationResult(result);
+          debug('[skill_validate] Formatting result');
+          const formatted = formatValidationResult(result);
+          debug('[skill_validate] Done');
+          resolve({ formatted });
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`skill_validate timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS);
+      });
+
+      try {
+        const { formatted } = await Promise.race([validationPromise, timeoutPromise]);
 
         return {
           content: [{

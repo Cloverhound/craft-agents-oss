@@ -391,6 +391,13 @@ export function FreeFormInput({
   // Track last caret position for focus restoration (e.g., after permission mode popover closes)
   const lastCaretPositionRef = React.useRef<number | null>(null)
 
+  // Store latest callbacks in refs to avoid effect re-runs on every render
+  // These are used in event listeners that should remain stable
+  const onSubmitRef = React.useRef(onSubmit)
+  onSubmitRef.current = onSubmit
+  const onPermissionModeChangeRef = React.useRef(onPermissionModeChange)
+  onPermissionModeChangeRef.current = onPermissionModeChange
+
   // Listen for craft:insert-text events (generic mechanism for inserting text into input)
   // Used by components that want to pre-fill the input with text
   React.useEffect(() => {
@@ -427,15 +434,15 @@ export function FreeFormInput({
       // Switch to allow-all (Auto) mode if in Explore mode (allow execution without prompts)
       // Only switch if currently in safe mode - if user is in 'ask' mode, respect their choice
       if (permissionMode === 'safe') {
-        onPermissionModeChange?.('allow-all')
+        onPermissionModeChangeRef.current?.('allow-all')
       }
       // Submit the message
-      onSubmit(text, undefined)
+      onSubmitRef.current(text, undefined)
     }
 
     window.addEventListener('craft:approve-plan', handleApprovePlan as EventListener)
     return () => window.removeEventListener('craft:approve-plan', handleApprovePlan as EventListener)
-  }, [sessionId, permissionMode, onPermissionModeChange, onSubmit])
+  }, [sessionId, permissionMode])
 
   // Listen for craft:approve-plan-with-compact events (Accept & Compact option)
   // This compacts the conversation first, then executes the plan.
@@ -451,7 +458,7 @@ export function FreeFormInput({
 
       // Switch to allow-all (Auto) mode if in Explore mode
       if (permissionMode === 'safe') {
-        onPermissionModeChange?.('allow-all')
+        onPermissionModeChangeRef.current?.('allow-all')
       }
 
       // Persist the pending plan execution state BEFORE sending /compact.
@@ -464,7 +471,7 @@ export function FreeFormInput({
       }
 
       // Send /compact to trigger compaction
-      onSubmit('/compact', undefined)
+      onSubmitRef.current('/compact', undefined)
 
       // Set up a one-time listener for compaction complete.
       // This handles the normal case (no reload during compaction).
@@ -480,9 +487,9 @@ export function FreeFormInput({
         // Send the execution message with explicit plan path
         // After compaction, Claude doesn't automatically remember the plan file
         if (planPath) {
-          onSubmit(`Read the plan at ${planPath} and execute it.`, undefined)
+          onSubmitRef.current(`Read the plan at ${planPath} and execute it.`, undefined)
         } else {
-          onSubmit('Plan approved, please execute.', undefined)
+          onSubmitRef.current('Plan approved, please execute.', undefined)
         }
 
         // Clear the pending state since we just sent the execution message
@@ -498,7 +505,7 @@ export function FreeFormInput({
 
     window.addEventListener('craft:approve-plan-with-compact', handleApprovePlanWithCompact as unknown as EventListener)
     return () => window.removeEventListener('craft:approve-plan-with-compact', handleApprovePlanWithCompact as unknown as EventListener)
-  }, [sessionId, permissionMode, onPermissionModeChange, onSubmit])
+  }, [sessionId, permissionMode])
 
   // Reload recovery: Check for pending plan execution on mount.
   // If the page reloaded after compaction completed (awaitingCompaction = false),
@@ -519,7 +526,7 @@ export function FreeFormInput({
       // Send it now and clear the pending state.
       hasExecuted = true
       console.log('[FreeFormInput] Resuming pending plan execution after reload:', pending.planPath)
-      onSubmit(`Read the plan at ${pending.planPath} and execute it.`, undefined)
+      onSubmitRef.current(`Read the plan at ${pending.planPath} and execute it.`, undefined)
 
       await window.electronAPI.sessionCommand(sessionId, {
         type: 'clearPendingPlanExecution',
@@ -542,7 +549,7 @@ export function FreeFormInput({
     return () => {
       window.removeEventListener('craft:compaction-complete', handleCompactionComplete as unknown as EventListener)
     }
-  }, [sessionId, onSubmit])
+  }, [sessionId])
 
   // Listen for craft:focus-input events (restore focus after popover/dropdown closes)
   React.useEffect(() => {
