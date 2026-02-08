@@ -7,13 +7,13 @@
 
 import { describe, it, expect } from "bun:test";
 import { createProvider, getSupportedProviders, getProviderDisplayName } from "../providers/factory.ts";
-import { ClaudeAgent } from "../providers/claude-agent.ts";
+import { ClaudeAgent } from "../providers/claude/claude-agent.ts";
 import {
   mapSDKErrorToTypedError,
   buildWindowsSkillsDirError,
   detectInactiveSourceToolError,
   ToolIndex,
-} from "../providers/event-normalizer.ts";
+} from "../providers/claude/event-normalizer.ts";
 import type { AgentProvider, ProviderType } from "../providers/types.ts";
 
 describe("Provider Factory", () => {

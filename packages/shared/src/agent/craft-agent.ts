@@ -1,8 +1,8 @@
 import { createSdkMcpServer, tool, AbortError, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { resetClaudeConfigCheck } from './options.ts';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
-import { ClaudeAgent, ForceStopError as ProviderForceStopError } from './providers/claude-agent.ts';
-import { detectInactiveSourceToolError, ToolIndex, buildWindowsSkillsDirError } from './providers/event-normalizer.ts';
+import { ClaudeAgent, ForceStopError as ProviderForceStopError } from './providers/claude/claude-agent.ts';
+import { detectInactiveSourceToolError, ToolIndex, buildWindowsSkillsDirError } from './providers/claude/event-normalizer.ts';
 import type { ChatExecutionConfig, MessageDelivery } from './providers/types.ts';
 import { z } from 'zod';
 import { getSystemPrompt, getDateTimeContext, getWorkingDirectoryContext } from '../prompts/system.ts';

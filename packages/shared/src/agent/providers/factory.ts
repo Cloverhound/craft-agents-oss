@@ -1,5 +1,5 @@
 import type { AgentProvider, ProviderType } from "./types.ts";
-import { ClaudeAgent } from "./claude-agent.ts";
+import { ClaudeAgent } from "./claude/claude-agent.ts";
 
 export function createProvider(type: ProviderType): AgentProvider {
   switch (type) {

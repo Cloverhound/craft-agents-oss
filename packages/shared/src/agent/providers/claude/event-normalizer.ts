@@ -10,8 +10,8 @@
 
 import type { SDKMessage, SDKAssistantMessageError } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent } from "@craft-agent/core/types";
-import type { AgentError } from "../errors.ts";
-import { ToolIndex, extractToolStarts, extractToolResults, type ContentBlock } from "../tool-matching.ts";
+import type { AgentError } from "../../errors.ts";
+import { ToolIndex, extractToolStarts, extractToolResults, type ContentBlock } from "../../tool-matching.ts";
 
 // Re-export ToolIndex for use by ClaudeAgent
 export { ToolIndex };
