@@ -8,13 +8,20 @@
  * CraftAgent (the orchestrator) delegates SDK work here via executeChat().
  */
 
+import {
+  Codex,
+  type Thread,
+  type ThreadOptions,
+  type CodexOptions,
+  type ThreadEvent,
+  type ApprovalMode,
+  type SandboxMode,
+} from "@openai/codex-sdk";
 import type { AgentEvent } from "@craft-agent/core/types";
 import type { AgentProvider, ChatExecutionConfig, ProviderFeature } from "../types.ts";
 import { convertThreadEvent } from "./event-normalizer.ts";
 import { isCodexModel } from "../../../config/models.ts";
 import { debug } from "../../../utils/debug.ts";
-
-type ApprovalMode = "never" | "on-request" | "untrusted" | "on-failure";
 
 function mapPermissionMode(permissionMode?: string): ApprovalMode {
   switch (permissionMode) {
@@ -28,49 +35,42 @@ function mapPermissionMode(permissionMode?: string): ApprovalMode {
   }
 }
 
-async function loadCodexSdk() {
-  return await import("@openai/codex-sdk");
-}
-
 export class CodexAgent implements AgentProvider {
   readonly type = "codex" as const;
 
-  private codex: unknown = null;
-  private thread: unknown = null;
+  private codex: Codex | null = null;
+  private thread: Thread | null = null;
   private threadId: string | null = null;
   private sdkTools: string[] = [];
 
   async *executeChat(config: ChatExecutionConfig): AsyncGenerator<AgentEvent> {
-    const sdk = await loadCodexSdk();
-
     if (!this.codex) {
-      const codexOptions: Record<string, unknown> = {};
+      const codexOptions: CodexOptions = {};
       if (config.workspaceRootPath) {
         codexOptions.env = {
           ...process.env as Record<string, string>,
         };
       }
-      this.codex = new sdk.Codex(codexOptions);
+      this.codex = new Codex(codexOptions);
       debug("[CodexAgent] Created Codex client");
     }
 
-    const codexClient = this.codex as InstanceType<typeof sdk.Codex>;
     const codexModel = config.model && isCodexModel(config.model) ? config.model : undefined;
     debug(`[CodexAgent] Model: ${codexModel ?? "(default)"}`);
-    const threadOptions = {
+    const threadOptions: ThreadOptions = {
       model: codexModel,
       workingDirectory: config.workspaceRootPath,
-      sandboxMode: "workspace-write",
+      sandboxMode: "workspace-write" as SandboxMode,
       approvalPolicy: mapPermissionMode(config.permissionMode),
       skipGitRepoCheck: true,
     };
 
     if (config.resumeSessionId && !config.isRetry && this.threadId) {
       debug(`[CodexAgent] Resuming thread: ${this.threadId}`);
-      this.thread = codexClient.resumeThread(this.threadId);
+      this.thread = this.codex.resumeThread(this.threadId);
     } else {
       debug("[CodexAgent] Starting new thread");
-      this.thread = codexClient.startThread(threadOptions as Parameters<typeof codexClient.startThread>[0]);
+      this.thread = this.codex.startThread(threadOptions);
     }
 
     let prompt: string;
@@ -94,16 +94,16 @@ export class CodexAgent implements AgentProvider {
 
     debug(`[CodexAgent] Running streamed turn with prompt length: ${prompt.length}`);
 
-    const activeThread = this.thread as InstanceType<ReturnType<typeof codexClient.startThread>["constructor"]> & { runStreamed: (prompt: string) => Promise<{ events: AsyncIterable<unknown> }> };
-    const { events } = await activeThread.runStreamed(prompt);
+    const { events } = await this.thread.runStreamed(prompt);
 
     for await (const event of events) {
-      const threadEvent = event as { type: string; thread_id?: string; [key: string]: unknown };
+      const threadEvent = event as ThreadEvent;
 
       if (threadEvent.type === "thread.started") {
-        if (threadEvent.thread_id) {
-          this.threadId = threadEvent.thread_id as string;
-          config.onSessionIdUpdate?.(this.threadId);
+        const startedEvent = threadEvent as { thread_id: string };
+        if (startedEvent.thread_id) {
+          this.threadId = startedEvent.thread_id;
+          config.onSessionIdUpdate?.(startedEvent.thread_id);
           debug(`[CodexAgent] Thread ID: ${this.threadId}`);
         }
       }

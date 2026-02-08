@@ -38,9 +38,13 @@ extraResources:
     to: app/node_modules/@anthropic-ai/claude-agent-sdk
     filter:
       - "**/*"
+  - from: node_modules/@openai/codex-sdk
+    to: app/node_modules/@openai/codex-sdk
+    filter:
+      - "**/*"
 
 extraMetadata:
-  main: dist/main.cjs
+  main: dist/main.mjs
 
 # Auto-update: electron-updater fetches from this URL for update manifests (.yml files)
 publish:

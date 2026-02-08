@@ -184,9 +184,11 @@ $MainArgs = @(
     "apps/electron/src/main/index.ts",
     "--bundle",
     "--platform=node",
-    "--format=cjs",
-    "--outfile=apps/electron/dist/main.cjs",
-    "--external:electron"
+    "--format=esm",
+    "--outfile=apps/electron/dist/main.mjs",
+    "--external:electron",
+    "--external:@openai/codex-sdk",
+    "--banner:js=import { createRequire as __esbuild_createRequire } from 'module'; import { dirname as __esbuild_dirname } from 'path'; import { fileURLToPath as __esbuild_fileURLToPath } from 'url'; const require = __esbuild_createRequire(import.meta.url); const __filename = __esbuild_fileURLToPath(import.meta.url); const __dirname = __esbuild_dirname(__filename);"
 )
 # Add OAuth defines if env vars are set
 if ($env:GOOGLE_OAUTH_CLIENT_ID) {
