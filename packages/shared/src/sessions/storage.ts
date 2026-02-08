@@ -168,6 +168,7 @@ export async function createSession(
     permissionMode?: SessionConfig['permissionMode'];
     enabledSourceSlugs?: string[];
     model?: string;
+    provider?: string;
     hidden?: boolean;
     todoState?: SessionConfig['todoState'];
     labels?: string[];
@@ -198,6 +199,7 @@ export async function createSession(
     permissionMode: options?.permissionMode,
     enabledSourceSlugs: options?.enabledSourceSlugs,
     model: options?.model,
+    provider: options?.provider,
     hidden: options?.hidden,
     todoState: options?.todoState,
     labels: options?.labels,
@@ -403,6 +405,7 @@ function headerToMetadata(header: SessionHeader, workspaceRootPath: string): Ses
       sdkCwd,
       model: header.model,
       thinkingLevel: header.thinkingLevel,
+      provider: header.provider,
       // Shared viewer state - must be included for persistence across app restarts
       sharedUrl: header.sharedUrl,
       sharedId: header.sharedId,
@@ -519,6 +522,7 @@ export async function updateSessionMetadata(
     | 'sharedUrl'
     | 'sharedId'
     | 'model'
+    | 'provider'
   >>
 ): Promise<void> {
   const session = loadSession(workspaceRootPath, sessionId);
@@ -536,6 +540,7 @@ export async function updateSessionMetadata(
   if ('sharedUrl' in updates) session.sharedUrl = updates.sharedUrl;
   if ('sharedId' in updates) session.sharedId = updates.sharedId;
   if (updates.model !== undefined) session.model = updates.model;
+  if (updates.provider !== undefined) session.provider = updates.provider;
 
   await saveSession(session);
 }

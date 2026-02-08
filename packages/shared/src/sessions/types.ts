@@ -95,6 +95,8 @@ export interface SessionConfig {
   model?: string;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Provider for this session ('claude' | 'codex'). Immutable after creation. Defaults to 'claude'. */
+  provider?: string;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -166,6 +168,8 @@ export interface SessionHeader {
   model?: string;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Provider for this session ('claude' | 'codex'). Immutable after creation. Defaults to 'claude'. */
+  provider?: string;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -231,6 +235,8 @@ export interface SessionMetadata {
   model?: string;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Provider for this session ('claude' | 'codex'). Immutable after creation. Defaults to 'claude'. */
+  provider?: string;
   /** ID of last message user has read - for unread detection */
   lastReadMessageId?: string;
   /** ID of the last final (non-intermediate) assistant message - for unread detection */

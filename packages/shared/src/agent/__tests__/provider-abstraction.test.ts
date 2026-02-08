@@ -16,6 +16,14 @@ import {
   ToolIndex,
 } from "../providers/claude/event-normalizer.ts";
 import type { AgentProvider, ProviderType } from "../providers/types.ts";
+import {
+  getModelsForProvider,
+  detectProviderFromModel,
+  isClaudeModel,
+  isCodexModel,
+  CLAUDE_MODELS,
+  CODEX_MODELS,
+} from "../../config/models.ts";
 
 describe("Provider Factory", () => {
   it("creates a ClaudeAgent for 'claude' type", () => {
@@ -251,5 +259,101 @@ describe("ToolIndex", () => {
     const index = new ToolIndex();
     expect(index.getName("unknown")).toBeUndefined();
     expect(index.getInput("unknown")).toBeUndefined();
+  });
+});
+
+describe("Model-Provider Mapping", () => {
+  it("getModelsForProvider returns only Claude models for 'claude'", () => {
+    const models = getModelsForProvider("claude");
+    expect(models.length).toBe(CLAUDE_MODELS.length);
+    for (const m of models) {
+      expect(m.provider).toBe("claude");
+    }
+  });
+
+  it("getModelsForProvider returns only Codex models for 'codex'", () => {
+    const models = getModelsForProvider("codex");
+    expect(models.length).toBe(CODEX_MODELS.length);
+    for (const m of models) {
+      expect(m.provider).toBe("codex");
+    }
+  });
+
+  it("detectProviderFromModel identifies Claude models", () => {
+    expect(detectProviderFromModel("claude-sonnet-4-5-20250929")).toBe("claude");
+    expect(detectProviderFromModel("claude-opus-4-6")).toBe("claude");
+    expect(detectProviderFromModel("claude-haiku-4-5-20251001")).toBe("claude");
+  });
+
+  it("detectProviderFromModel identifies Codex models", () => {
+    expect(detectProviderFromModel("gpt-5.3-codex")).toBe("codex");
+    expect(detectProviderFromModel("gpt-5.2-codex")).toBe("codex");
+    expect(detectProviderFromModel("gpt-5.2")).toBe("codex");
+  });
+
+  it("detectProviderFromModel defaults to claude for unknown models", () => {
+    expect(detectProviderFromModel("unknown-model")).toBe("claude");
+  });
+
+  it("isClaudeModel matches Claude model IDs", () => {
+    expect(isClaudeModel("claude-sonnet-4-5-20250929")).toBe(true);
+    expect(isClaudeModel("claude-opus-4-6")).toBe(true);
+    expect(isClaudeModel("gpt-5.3-codex")).toBe(false);
+    expect(isClaudeModel("gpt-5.2")).toBe(false);
+  });
+
+  it("isCodexModel matches Codex model IDs", () => {
+    expect(isCodexModel("gpt-5.3-codex")).toBe(true);
+    expect(isCodexModel("gpt-5.2-codex")).toBe(true);
+    expect(isCodexModel("gpt-5.2")).toBe(true);
+    expect(isCodexModel("claude-sonnet-4-5-20250929")).toBe(false);
+  });
+});
+
+describe("CodexAgent", () => {
+  it("implements AgentProvider interface", () => {
+    const agent = new CodexAgent();
+    expect(agent.type).toBe("codex");
+    expect(typeof agent.executeChat).toBe("function");
+    expect(typeof agent.forceStop).toBe("function");
+    expect(typeof agent.cleanup).toBe("function");
+    expect(typeof agent.supports).toBe("function");
+    expect(typeof agent.getSessionId).toBe("function");
+    expect(typeof agent.setSessionId).toBe("function");
+    expect(typeof agent.getSdkTools).toBe("function");
+  });
+
+  it("supports expected features", () => {
+    const agent = new CodexAgent();
+    expect(agent.supports("extended_thinking")).toBe(false);
+    expect(agent.supports("vision")).toBe(true);
+    expect(agent.supports("native_mcp")).toBe(true);
+    expect(agent.supports("streaming")).toBe(true);
+  });
+
+  it("manages session ID", () => {
+    const agent = new CodexAgent();
+    expect(agent.getSessionId()).toBeNull();
+
+    agent.setSessionId("codex-thread-456");
+    expect(agent.getSessionId()).toBe("codex-thread-456");
+
+    agent.setSessionId(null);
+    expect(agent.getSessionId()).toBeNull();
+  });
+
+  it("returns empty SDK tools initially", () => {
+    const agent = new CodexAgent();
+    expect(agent.getSdkTools()).toEqual([]);
+  });
+
+  it("forceStop does not throw when no thread exists", () => {
+    const agent = new CodexAgent();
+    expect(() => agent.forceStop()).not.toThrow();
+  });
+
+  it("cleanup does not throw when no thread exists", async () => {
+    const agent = new CodexAgent();
+    await expect(agent.cleanup()).resolves.toBeUndefined();
   });
 });

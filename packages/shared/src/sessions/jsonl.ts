@@ -135,6 +135,7 @@ export function createSessionHeader(session: StoredSession): SessionHeader {
     sharedId: session.sharedId,
     model: session.model,
     thinkingLevel: session.thinkingLevel,
+    provider: session.provider,
     pendingPlanExecution: session.pendingPlanExecution,
     // Pre-computed fields
     messageCount: session.messages.length,

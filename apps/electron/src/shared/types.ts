@@ -341,6 +341,8 @@ export interface Session {
   model?: string
   // Thinking level for this session ('off', 'think', 'max')
   thinkingLevel?: ThinkingLevel
+  /** Provider for this session ('claude' | 'codex'). Immutable after creation. */
+  provider?: string
   // Role/type of the last message (for badge display without loading messages)
   lastMessageRole?: 'user' | 'assistant' | 'plan' | 'tool' | 'error'
   // ID of the last final (non-intermediate) assistant message - pre-computed for unread detection
@@ -391,6 +393,8 @@ export interface CreateSessionOptions {
   workingDirectory?: string | 'user_default' | 'none'
   /** Model override for the session (e.g., 'haiku', 'sonnet') */
   model?: string
+  /** Provider for the session ('claude' | 'codex'). Defaults to workspace setting. */
+  provider?: string
   /** System prompt preset for the session ('default' | 'mini' or custom string) */
   systemPromptPreset?: 'default' | 'mini' | string
   /** When true, session won't appear in session list (e.g., mini edit sessions) */
@@ -1139,6 +1143,8 @@ export interface UpdateInfo {
 export interface WorkspaceSettings {
   name?: string
   model?: string
+  /** Default provider for new sessions ('claude' | 'codex') */
+  provider?: string
   permissionMode?: PermissionMode
   /** Permission modes available for SHIFT+TAB cycling (min 2 modes) */
   cyclablePermissionModes?: PermissionMode[]

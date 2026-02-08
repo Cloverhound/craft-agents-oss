@@ -49,7 +49,7 @@ import { type Session, type Message, type SessionEvent, type FileAttachment, typ
 import { generateSessionTitle, regenerateSessionTitle, formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrl, getEmojiIcon, resetSummarizationClient, resolveToolIcon } from '@craft-agent/shared/utils'
 import { loadWorkspaceSkills, type LoadedSkill } from '@craft-agent/shared/skills'
 import type { ToolDisplayMeta } from '@craft-agent/core/types'
-import { DEFAULT_MODEL, getToolIconsDir } from '@craft-agent/shared/config'
+import { DEFAULT_MODEL, DEFAULT_CODEX_MODEL, getToolIconsDir } from '@craft-agent/shared/config'
 import { type ThinkingLevel, DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
 import { evaluateAutoLabels } from '@craft-agent/shared/labels/auto'
 import { listLabels } from '@craft-agent/shared/labels/storage'
@@ -383,6 +383,8 @@ interface ManagedSession {
   model?: string
   // Thinking level for this session ('off', 'think', 'max')
   thinkingLevel?: ThinkingLevel
+  // Provider for this session ('claude' | 'codex'). Immutable after creation.
+  provider?: string
   // System prompt preset for mini agents ('default' | 'mini')
   systemPromptPreset?: 'default' | 'mini' | string
   // Role/type of the last message (for badge display without loading messages)
@@ -1001,6 +1003,7 @@ export class SessionManager {
             sdkCwd: meta.sdkCwd,
             model: meta.model,
             thinkingLevel: meta.thinkingLevel,
+            provider: meta.provider,
             lastMessageRole: meta.lastMessageRole,
             messageQueue: [],
             backgroundShellCommands: new Map(),
@@ -1054,6 +1057,7 @@ export class SessionManager {
         workingDirectory: managed.workingDirectory,
         sdkCwd: managed.sdkCwd,
         thinkingLevel: managed.thinkingLevel,
+        provider: managed.provider,
         messages: persistableMessages.map(messageToStored),
         tokenUsage: managed.tokenUsage ?? {
           inputTokens: 0,
@@ -1420,6 +1424,7 @@ export class SessionManager {
         hasUnread: m.hasUnread,  // Explicit unread flag for NEW badge state machine
         workingDirectory: m.workingDirectory,
         model: m.model,
+        provider: m.provider,
         enabledSourceSlugs: m.enabledSourceSlugs,
         labels: m.labels,
         sharedUrl: m.sharedUrl,
@@ -1463,6 +1468,7 @@ export class SessionManager {
       hasUnread: m.hasUnread,  // Explicit unread flag for NEW badge state machine
       workingDirectory: m.workingDirectory,
       model: m.model,
+      provider: m.provider,
       sessionFolderPath: getSessionStoragePath(m.workspace.rootPath, m.id),
       enabledSourceSlugs: m.enabledSourceSlugs,
       labels: m.labels,
@@ -1550,6 +1556,8 @@ export class SessionManager {
     const defaultThinkingLevel = wsConfig?.defaults?.thinkingLevel ?? globalDefaults.workspaceDefaults.thinkingLevel
     // Get default model from workspace config (used when no session-specific model is set)
     const defaultModel = wsConfig?.defaults?.model
+    // Resolve provider: options override > workspace config > default 'claude'
+    const resolvedProvider = options?.provider ?? wsConfig?.defaults?.provider ?? "claude"
 
     // Resolve working directory from options:
     // - 'user_default' or undefined: Use workspace's configured default
@@ -1568,14 +1576,16 @@ export class SessionManager {
     const storedSession = await createStoredSession(workspaceRootPath, {
       permissionMode: defaultPermissionMode,
       workingDirectory: resolvedWorkingDir,
+      provider: resolvedProvider,
       hidden: options?.hidden,
       todoState: options?.todoState,
       labels: options?.labels,
       isFlagged: options?.isFlagged,
     })
 
-    // Model priority: options.model > storedSession.model > workspace default
-    const resolvedModel = options?.model || storedSession.model || defaultModel
+    // Model priority: options.model > storedSession.model > workspace default (provider-aware)
+    const providerDefaultModel = resolvedProvider === "codex" ? DEFAULT_CODEX_MODEL : defaultModel
+    const resolvedModel = options?.model || storedSession.model || providerDefaultModel
 
     // Log mini agent session creation
     if (options?.systemPromptPreset === 'mini' || options?.model) {
@@ -1600,6 +1610,7 @@ export class SessionManager {
       // Session-specific model takes priority, then workspace default
       model: resolvedModel,
       thinkingLevel: defaultThinkingLevel,
+      provider: resolvedProvider,
       // System prompt preset for mini agents
       systemPromptPreset: options?.systemPromptPreset,
       messageQueue: [],
@@ -1628,6 +1639,7 @@ export class SessionManager {
       workingDirectory: resolvedWorkingDir,
       model: managed.model,
       thinkingLevel: defaultThinkingLevel,
+      provider: resolvedProvider,
       sessionFolderPath: getSessionStoragePath(workspaceRootPath, storedSession.id),
       hidden: options?.hidden,
     }
@@ -1651,6 +1663,8 @@ export class SessionManager {
         model: resolveModelId(managed.model || config?.model || DEFAULT_MODEL),
         // Initialize thinking level at construction to avoid race conditions
         thinkingLevel: managed.thinkingLevel,
+        // Provider is immutable per session (set at creation time)
+        provider: managed.provider as import('@craft-agent/shared/agent/providers').ProviderType | undefined,
         isHeadless: !AGENT_FLAGS.defaultModesEnabled,
         // System prompt preset for mini agents (focused prompts for quick edits)
         systemPromptPreset: managed.systemPromptPreset,

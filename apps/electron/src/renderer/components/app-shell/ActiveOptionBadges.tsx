@@ -73,6 +73,8 @@ export interface ActiveOptionBadgesProps {
   currentTodoState?: string
   /** Callback when state changes */
   onTodoStateChange?: (stateId: string) => void
+  /** Provider for this session ('claude' | 'codex'). Read-only badge shown when not default. */
+  provider?: string
   /** Additional CSS classes */
   className?: string
 }
@@ -102,6 +104,7 @@ export function ActiveOptionBadges({
   todoStates = [],
   currentTodoState,
   onTodoStateChange,
+  provider,
   className,
 }: ActiveOptionBadgesProps) {
   // Resolve session label entries to their config objects + parsed values.
@@ -140,8 +143,10 @@ export function ActiveOptionBadges({
   // before badges reach the faded zone on the left edge.
   const stackRef = useDynamicStack({ gap: 8, minVisible: 20, reservedStart: 24 })
 
+  const isNonDefaultProvider = provider && provider !== "claude"
+
   // Only render if badges or tasks are active
-  if (!ultrathinkEnabled && !permissionMode && tasks.length === 0 && !hasStackContent) {
+  if (!ultrathinkEnabled && !permissionMode && tasks.length === 0 && !hasStackContent && !isNonDefaultProvider) {
     return null
   }
 
@@ -156,6 +161,16 @@ export function ActiveOptionBadges({
             onPermissionModeChange={onPermissionModeChange}
             onUltrathinkChange={onUltrathinkChange}
           />
+        </div>
+      )}
+
+      {/* Provider Badge (read-only, shown when not default Claude) */}
+      {isNonDefaultProvider && (
+        <div
+          className="h-[30px] pl-2.5 pr-2.5 text-xs font-medium rounded-[8px] flex items-center gap-1.5 shrink-0 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shadow-tinted select-none"
+          style={{ '--shadow-color': '16, 185, 129' } as React.CSSProperties}
+        >
+          {provider === "codex" ? "Codex" : provider}
         </div>
       )}
 

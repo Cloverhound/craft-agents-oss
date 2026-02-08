@@ -1720,6 +1720,16 @@ function AppShellContent({
     navigate(defaultViewRoute(newSession.id))
   }, [activeWorkspace, onCreateSession, defaultViewRoute])
 
+  const handleNewChatWithProvider = useCallback(async (provider: string) => {
+    if (!activeWorkspace) return
+
+    setSearchActive(false)
+    setSearchQuery('')
+
+    const newSession = await onCreateSession(activeWorkspace.id, { provider })
+    navigate(defaultViewRoute(newSession.id))
+  }, [activeWorkspace, onCreateSession, defaultViewRoute])
+
   // Delete Source - simplified since agents system is removed
   const handleDeleteSource = useCallback(async (sourceSlug: string) => {
     if (!activeWorkspace) return
@@ -2116,7 +2126,7 @@ function AppShellContent({
                     </ContextMenuTrigger>
                     <StyledContextMenuContent>
                       <ContextMenuProvider>
-                        <SidebarMenu type="newChat" />
+                        <SidebarMenu type="newChat" onNewChatWithProvider={handleNewChatWithProvider} />
                       </ContextMenuProvider>
                     </StyledContextMenuContent>
                   </ContextMenu>

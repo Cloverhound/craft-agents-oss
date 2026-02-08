@@ -26,9 +26,9 @@ export const CLAUDE_MODELS: ModelDefinition[] = [
 ];
 
 export const CODEX_MODELS: ModelDefinition[] = [
-  { id: 'codex-1', name: 'Codex 1', shortName: 'Codex', description: 'OpenAI Codex agent', provider: 'codex', contextWindow: 192000 },
-  { id: 'gpt-4.1', name: 'GPT-4.1', shortName: 'GPT-4.1', description: 'General-purpose', provider: 'codex', contextWindow: 1048576 },
-  { id: 'o3', name: 'o3', shortName: 'o3', description: 'Reasoning model', provider: 'codex', contextWindow: 200000 },
+  { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', shortName: 'GPT-5.3 Codex', description: 'Latest Codex agent', provider: 'codex', contextWindow: 192000 },
+  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', shortName: 'GPT-5.2 Codex', description: 'Codex agent', provider: 'codex', contextWindow: 192000 },
+  { id: 'gpt-5.2', name: 'GPT-5.2', shortName: 'GPT-5.2', description: 'General-purpose', provider: 'codex', contextWindow: 1048576 },
 ];
 
 export const MODELS: ModelDefinition[] = [
@@ -42,6 +42,9 @@ export const MODELS: ModelDefinition[] = [
 
 /** Default model for main chat (user-facing) */
 export const DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
+
+/** Default model for Codex sessions */
+export const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex';
 
 /** Model for agent definition extraction (always high quality) */
 export const EXTRACTION_MODEL = 'claude-opus-4-6';
@@ -100,7 +103,7 @@ export function isClaudeModel(modelId: string): boolean {
 
 export function isCodexModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
-  return lower.startsWith('codex-') || lower.startsWith('gpt-') || lower === 'o3' || lower.includes('/codex');
+  return lower.startsWith('gpt-') || lower.includes('-codex') || lower.includes('/codex');
 }
 
 export function getModelsForProvider(provider: ProviderType): ModelDefinition[] {
