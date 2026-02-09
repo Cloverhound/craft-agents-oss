@@ -5,9 +5,9 @@
  * model detection, and authentication verification.
  */
 
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeEach } from "bun:test";
 import { CodexAgent, mapPermissionMode, buildPermissionContext } from "../providers/codex/codex-agent.ts";
-import { convertThreadEvent } from "../providers/codex/event-normalizer.ts";
+import { convertThreadEvent, resetCodexNormalizerState } from "../providers/codex/event-normalizer.ts";
 
 function convertThreadStarted(ev: { type: "thread.started"; thread_id: string }) {
   return convertThreadEvent(ev);
@@ -294,6 +294,10 @@ describe("buildPermissionContext", () => {
 // ============================================================================
 
 describe("Codex Event Normalizer", () => {
+  beforeEach(() => {
+    resetCodexNormalizerState();
+  });
+
   describe("thread.started", () => {
     it("emits status event", () => {
       const events = convertThreadStarted(createThreadStartedEvent());
@@ -357,12 +361,16 @@ describe("Codex Event Normalizer", () => {
       expect(events[0].type).toBe("text_delta");
     });
 
-    it("emits text_complete for completed phase", () => {
-      const events = convertItemCompleted(createAgentMessageItem("Hello world", "completed") as any);
-      expect(events).toHaveLength(1);
-      expect(events[0].type).toBe("text_complete");
-      if (events[0].type === "text_complete") {
-        expect(events[0].text).toBe("Hello world");
+    it("buffers text on completed phase, flushes as text_complete at next boundary", () => {
+      const completedEvents = convertItemCompleted(createAgentMessageItem("Hello world", "completed") as any);
+      expect(completedEvents).toHaveLength(1);
+      expect(completedEvents[0].type).toBe("text_delta");
+
+      const turnEndEvents = convertTurnCompleted(createTurnCompletedEvent());
+      const textComplete = turnEndEvents.find(e => e.type === "text_complete");
+      expect(textComplete).toBeDefined();
+      if (textComplete?.type === "text_complete") {
+        expect(textComplete.text).toBe("Hello world");
       }
     });
   });
@@ -480,9 +488,9 @@ describe("Codex Event Normalizer", () => {
 describe("Model Detection", () => {
   describe("isCodexModel", () => {
     it("detects Codex models", () => {
-      expect(isCodexModel("codex-1")).toBe(true);
-      expect(isCodexModel("gpt-4.1")).toBe(true);
-      expect(isCodexModel("o3")).toBe(true);
+      expect(isCodexModel("gpt-5.3-codex")).toBe(true);
+      expect(isCodexModel("gpt-5.2")).toBe(true);
+      expect(isCodexModel("gpt-5.2-codex")).toBe(true);
     });
 
     it("does not match Claude models", () => {
@@ -498,16 +506,16 @@ describe("Model Detection", () => {
     });
 
     it("does not match Codex models", () => {
-      expect(isClaudeModel("codex-1")).toBe(false);
-      expect(isClaudeModel("gpt-4.1")).toBe(false);
+      expect(isClaudeModel("gpt-5.3-codex")).toBe(false);
+      expect(isClaudeModel("gpt-5.2")).toBe(false);
     });
   });
 
   describe("detectProviderFromModel", () => {
     it("returns codex for Codex models", () => {
-      expect(detectProviderFromModel("codex-1")).toBe("codex");
-      expect(detectProviderFromModel("gpt-4.1")).toBe("codex");
-      expect(detectProviderFromModel("o3")).toBe("codex");
+      expect(detectProviderFromModel("gpt-5.3-codex")).toBe("codex");
+      expect(detectProviderFromModel("gpt-5.2")).toBe("codex");
+      expect(detectProviderFromModel("gpt-5.2-codex")).toBe("codex");
     });
 
     it("returns claude for Claude models", () => {
