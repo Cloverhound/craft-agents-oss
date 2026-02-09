@@ -206,9 +206,9 @@ await runTest(
 );
 
 // ============================================================
-// Test 5: Skills discovery
+// Test 5: Skills discovery (injected via developer_instructions)
 // ============================================================
-const testSkillDir = join(workspacePath, ".agents", "skills", "_test-skill");
+const testSkillDir = join(workspacePath, "skills", "_test-skill");
 const testSkillMd = `---
 name: Test Skill
 description: A test skill that instructs the agent to include SKILL_MARKER_ACTIVE in responses.

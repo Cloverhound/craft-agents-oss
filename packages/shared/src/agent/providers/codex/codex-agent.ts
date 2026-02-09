@@ -6,8 +6,7 @@
  * and converts Codex ThreadEvents to AgentEvents via event-normalizer.
  *
  * Integrates Craft context via:
- *   - developer_instructions: system prompt adapted for Codex
- *   - skills.config: workspace skill directories
+ *   - developer_instructions: system prompt adapted for Codex + skill catalog
  *   - mcp_servers: source MCP servers + session-scoped tools bridge
  *
  * CraftAgent (the orchestrator) delegates SDK work here via executeChat().
@@ -28,9 +27,11 @@ import { convertThreadEvent } from "./event-normalizer.ts";
 import { isCodexModel } from "../../../config/models.ts";
 import { debug } from "../../../utils/debug.ts";
 import { loadAllSkills } from "../../../skills/storage.ts";
+import type { LoadedSkill } from "../../../skills/types.ts";
 import { mapSourceMcpServers } from "./codex-mcp-mapper.ts";
 import { createCodexSessionTools, type CodexSessionToolCallbacks } from "./codex-session-tools.ts";
 import type { CodexMcpServerHandle } from "../../../mcp/codex-mcp-bridge.ts";
+import { join } from "path";
 
 function mapPermissionMode(permissionMode?: string): ApprovalMode {
   switch (permissionMode) {
@@ -61,7 +62,7 @@ function extractDeveloperInstructions(systemPrompt: ProviderSystemPrompt): strin
 
   text = text.replace(
     /\*\*SDK Plugin:\*\*.*?skill-slug`\./s,
-    "Skills are loaded from your workspace skills directory."
+    ""
   );
   text = text.replace(/powered by Claude Code/g, "powered by Codex");
   text = text.replace(/You are powered by Claude Code, so you/g, "You");
@@ -70,10 +71,32 @@ function extractDeveloperInstructions(systemPrompt: ProviderSystemPrompt): strin
   return text;
 }
 
-async function discoverSkillPaths(workspaceRootPath: string): Promise<Array<{ path: string; enabled: boolean }>> {
+function buildSkillCatalog(skills: LoadedSkill[]): string {
+  if (skills.length === 0) return "";
+
+  const entries = skills.map((s) => {
+    const skillMdPath = join(s.path, "SKILL.md");
+    return `- **${s.metadata.name}** (${s.slug}): ${s.metadata.description}\n  Path: \`${skillMdPath}\``;
+  });
+
+  return [
+    "\n## Available Skills",
+    "",
+    "The following skills are available in this workspace. To use a skill, read its SKILL.md file for full instructions.",
+    "",
+    ...entries,
+    "",
+  ].join("\n");
+}
+
+function discoverSkills(workspaceRootPath: string): LoadedSkill[] {
   try {
-    const skills = loadAllSkills(workspaceRootPath);
-    return skills.map((s) => ({ path: s.path, enabled: true }));
+    const skills = loadAllSkills(workspaceRootPath, workspaceRootPath);
+    debug(`[CodexAgent] Discovered ${skills.length} skills from workspace: ${workspaceRootPath}`);
+    for (const s of skills) {
+      debug(`[CodexAgent]   skill: ${s.slug} (${s.source}) at ${s.path}`);
+    }
+    return skills;
   } catch (err) {
     debug(`[CodexAgent] Skills discovery failed: ${err instanceof Error ? err.message : String(err)}`);
     return [];
@@ -96,8 +119,12 @@ export class CodexAgent implements AgentProvider {
 
   async *executeChat(config: ChatExecutionConfig): AsyncGenerator<AgentEvent> {
     if (!this.codex) {
-      const developerInstructions = extractDeveloperInstructions(config.systemPrompt);
-      const skillPaths = await discoverSkillPaths(config.workspaceRootPath);
+      let developerInstructions = extractDeveloperInstructions(config.systemPrompt) ?? "";
+      const skills = discoverSkills(config.workspaceRootPath);
+      const skillCatalog = buildSkillCatalog(skills);
+      if (skillCatalog) {
+        developerInstructions += skillCatalog;
+      }
 
       this.sessionBridge = await createCodexSessionTools(
         config.sessionId,
@@ -111,10 +138,6 @@ export class CodexAgent implements AgentProvider {
 
       if (developerInstructions) {
         codexConfig.developer_instructions = developerInstructions;
-      }
-
-      if (skillPaths.length > 0) {
-        codexConfig.skills = { config: skillPaths };
       }
 
       const mcpServers: Record<string, any> = {
@@ -133,7 +156,7 @@ export class CodexAgent implements AgentProvider {
       this.codex = new Codex(codexOptions);
       debug("[CodexAgent] Created Codex client with context integration");
       debug(`[CodexAgent]   developer_instructions: ${developerInstructions ? `${developerInstructions.length} chars` : "none"}`);
-      debug(`[CodexAgent]   skills: ${skillPaths.length} paths`);
+      debug(`[CodexAgent]   skills: ${skills.length} (injected into developer_instructions)`);
       debug(`[CodexAgent]   mcp_servers: ${Object.keys(mcpServers).join(", ")}`);
     }
 
