@@ -67,13 +67,15 @@ export function handleComplete(
     })
   }
 
+  updatedMessages = updatedMessages.filter(m => m.role !== 'status')
+
   return {
     state: {
       session: {
         ...session,
         messages: updatedMessages,
         isProcessing: false,
-        currentStatus: undefined,  // Clear any lingering status
+        currentStatus: undefined,
         // Update tokenUsage from complete event (for real-time context counter updates)
         tokenUsage: event.tokenUsage ?? session.tokenUsage,
         // Update hasUnread flag from main process (state machine for NEW badge)
@@ -95,12 +97,14 @@ export function handleError(
 ): ProcessResult {
   const { session } = state
 
-  // Fail-safe: Mark any running tools as failed
-  const messagesWithFailedTools = session.messages.map(m =>
-    m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error'
-      ? { ...m, toolStatus: 'error' as const, toolResult: 'Error occurred', isError: true }
-      : m
-  )
+  // Fail-safe: Mark any running tools as failed, remove transient status messages
+  const messagesWithFailedTools = session.messages
+    .filter(m => m.role !== 'status')
+    .map(m =>
+      m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error'
+        ? { ...m, toolStatus: 'error' as const, toolResult: 'Error occurred', isError: true }
+        : m
+    )
 
   const errorMessage: Message = {
     id: generateMessageId(),
@@ -115,7 +119,7 @@ export function handleError(
         ...session,
         messages: [...messagesWithFailedTools, errorMessage],
         isProcessing: false,
-        currentStatus: undefined,  // Clear any lingering status
+        currentStatus: undefined,
       },
       streaming: null,
     },
@@ -132,12 +136,14 @@ export function handleTypedError(
 ): ProcessResult {
   const { session } = state
 
-  // Fail-safe: Mark any running tools as failed
-  const messagesWithFailedTools = session.messages.map(m =>
-    m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error'
-      ? { ...m, toolStatus: 'error' as const, toolResult: 'Error occurred', isError: true }
-      : m
-  )
+  // Fail-safe: Mark any running tools as failed, remove transient status messages
+  const messagesWithFailedTools = session.messages
+    .filter(m => m.role !== 'status')
+    .map(m =>
+      m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error'
+        ? { ...m, toolStatus: 'error' as const, toolResult: 'Error occurred', isError: true }
+        : m
+    )
 
   const errorMessage: Message = {
     id: generateMessageId(),
@@ -159,7 +165,7 @@ export function handleTypedError(
         ...session,
         messages: [...messagesWithFailedTools, errorMessage],
         isProcessing: false,
-        currentStatus: undefined,  // Clear any lingering status
+        currentStatus: undefined,
       },
       streaming: null,
     },
