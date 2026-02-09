@@ -12,6 +12,9 @@ export interface HeadlessConfig {
   model?: string;               // -m flag
   outputFormat?: 'text' | 'json' | 'stream-json';
 
+  // Provider selection (defaults to 'claude')
+  provider?: 'claude' | 'codex';
+
   // Permission handling for bash commands
   permissionPolicy?: 'deny-all' | 'allow-safe' | 'allow-all';
 

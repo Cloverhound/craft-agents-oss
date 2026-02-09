@@ -165,10 +165,13 @@ async function runEsbuild(
       entryPoints: [join(ROOT_DIR, entryPoint)],
       bundle: true,
       platform: "node",
-      format: "cjs",
+      format: outfile.endsWith(".mjs") ? "esm" : "cjs",
       outfile: join(ROOT_DIR, outfile),
-      external: ["electron"],
+      external: outfile.endsWith(".mjs") ? ["electron", "@openai/codex-sdk"] : ["electron"],
       define: defines,
+      banner: outfile.endsWith(".mjs") ? {
+        js: "import { createRequire as __esbuild_createRequire } from 'module'; import { dirname as __esbuild_dirname } from 'path'; import { fileURLToPath as __esbuild_fileURLToPath } from 'url'; const require = __esbuild_createRequire(import.meta.url); const __filename = __esbuild_fileURLToPath(import.meta.url); const __dirname = __esbuild_dirname(__filename);",
+      } : undefined,
       logLevel: "warning",
     });
     return { success: true };
@@ -261,18 +264,18 @@ async function main(): Promise<void> {
   // =========================================================
   console.log("🔨 Building main process...");
 
-  const mainCjsPath = join(DIST_DIR, "main.cjs");
+  const mainMjsPath = join(DIST_DIR, "main.mjs");
   const preloadCjsPath = join(DIST_DIR, "preload.cjs");
 
   // Remove old build files to ensure fresh build
-  if (existsSync(mainCjsPath)) rmSync(mainCjsPath);
+  if (existsSync(mainMjsPath)) rmSync(mainMjsPath);
   if (existsSync(preloadCjsPath)) rmSync(preloadCjsPath);
 
   // Build main and preload in parallel
   const [mainResult, preloadResult] = await Promise.all([
     runEsbuild(
       "apps/electron/src/main/index.ts",
-      "apps/electron/dist/main.cjs",
+      "apps/electron/dist/main.mjs",
       oauthDefines
     ),
     runEsbuild(
@@ -294,7 +297,7 @@ async function main(): Promise<void> {
   // Wait for files to stabilize (filesystem flush)
   console.log("⏳ Waiting for build files to stabilize...");
   const [mainStable, preloadStable] = await Promise.all([
-    waitForFileStable(mainCjsPath),
+    waitForFileStable(mainMjsPath),
     waitForFileStable(preloadCjsPath),
   ]);
 
@@ -306,18 +309,26 @@ async function main(): Promise<void> {
   // Verify the built files are valid JavaScript
   console.log("🔍 Verifying build output...");
   const [mainValid, preloadValid] = await Promise.all([
-    verifyJsFile(mainCjsPath),
+    verifyJsFile(mainMjsPath),
     verifyJsFile(preloadCjsPath),
   ]);
 
   if (!mainValid.valid) {
-    console.error("❌ main.cjs is invalid:", mainValid.error);
+    console.error("❌ main.mjs is invalid:", mainValid.error);
     process.exit(1);
   }
 
   if (!preloadValid.valid) {
     console.error("❌ preload.cjs is invalid:", preloadValid.error);
     process.exit(1);
+  }
+
+  // Copy bridge entry script for Codex MCP bridge
+  const bridgeSrc = join(ROOT_DIR, "packages/shared/src/mcp/codex-mcp-bridge-entry.mjs");
+  const bridgeDest = join(DIST_DIR, "codex-mcp-bridge-entry.mjs");
+  if (existsSync(bridgeSrc)) {
+    cpSync(bridgeSrc, bridgeDest);
+    console.log("📋 Copied codex-mcp-bridge-entry.mjs to dist/");
   }
 
   console.log("✅ Initial build complete and verified\n");
@@ -346,10 +357,13 @@ async function main(): Promise<void> {
     entryPoints: [join(ROOT_DIR, "apps/electron/src/main/index.ts")],
     bundle: true,
     platform: "node",
-    format: "cjs",
-    outfile: join(ROOT_DIR, "apps/electron/dist/main.cjs"),
-    external: ["electron"],
+    format: "esm",
+    outfile: join(ROOT_DIR, "apps/electron/dist/main.mjs"),
+    external: ["electron", "@openai/codex-sdk"],
     define: oauthDefines,
+    banner: {
+      js: "import { createRequire as __esbuild_createRequire } from 'module'; import { dirname as __esbuild_dirname } from 'path'; import { fileURLToPath as __esbuild_fileURLToPath } from 'url'; const require = __esbuild_createRequire(import.meta.url); const __filename = __esbuild_fileURLToPath(import.meta.url); const __dirname = __esbuild_dirname(__filename);",
+    },
     logLevel: "info",
   });
   await mainContext.watch();

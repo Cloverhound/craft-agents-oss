@@ -53,7 +53,7 @@ import { cn } from '@/lib/utils'
 import { isMac, PATH_SEP, getPathBasename } from '@/lib/platform'
 import { applySmartTypography } from '@/lib/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
-import { MODELS, getModelShortName, getModelContextWindow, isClaudeModel } from '@config/models'
+import { MODELS, getModelShortName, getModelContextWindow, isClaudeModel, getModelsForProvider } from '@config/models'
 import { useOptionalAppShellContext } from '@/context/AppShellContext'
 import { EditPopover, getEditConfig } from '@/components/ui/EditPopover'
 import { SourceAvatar } from '@/components/ui/source-avatar'
@@ -187,6 +187,8 @@ export interface FreeFormInputProps {
   }
   /** Enable compact mode - hides attach, sources, working directory for popover embedding */
   compactMode?: boolean
+  /** Provider for this session ('claude' | 'codex'). Controls which models appear in dropdown. */
+  provider?: string
 }
 
 /**
@@ -237,6 +239,7 @@ export function FreeFormInput({
   isEmptySession = false,
   contextStatus,
   compactMode = false,
+  provider,
 }: FreeFormInputProps) {
   // Read custom model and workspace info from context.
   // Uses optional variant so playground (no provider) doesn't crash.
@@ -1562,14 +1565,8 @@ export function FreeFormInput({
                   <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
                 </StyledDropdownMenuItem>
               ) : (
-                /* Standard Anthropic model options */
-                MODELS.map((model) => {
+                (provider ? getModelsForProvider(provider as "claude" | "codex") : MODELS).map((model) => {
                   const isSelected = currentModel === model.id
-                  const descriptions: Record<string, string> = {
-                    'claude-opus-4-6': 'Most capable for complex work',
-                    'claude-sonnet-4-5-20250929': 'Best for everyday tasks',
-                    'claude-haiku-4-5-20251001': 'Fastest for quick answers',
-                  }
                   return (
                     <StyledDropdownMenuItem
                       key={model.id}
@@ -1578,7 +1575,7 @@ export function FreeFormInput({
                     >
                       <div className="text-left">
                         <div className="font-medium text-sm">{model.name}</div>
-                        <div className="text-xs text-muted-foreground">{descriptions[model.id] || model.description}</div>
+                        <div className="text-xs text-muted-foreground">{model.description}</div>
                       </div>
                       {isSelected && (
                         <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
@@ -1588,8 +1585,8 @@ export function FreeFormInput({
                 })
               )}
 
-              {/* Thinking level selector — only shown for Claude models (extended thinking is Claude-specific) */}
-              {(!customModel || isClaudeModel(customModel)) && (
+              {/* Thinking level selector — only shown for Claude provider (extended thinking is Claude-specific) */}
+              {(!provider || provider === "claude") && (!customModel || isClaudeModel(customModel)) && (
                 <>
                   <StyledDropdownMenuSeparator className="my-1" />
 

@@ -26,6 +26,8 @@ files:
   - packages/shared/src/network-interceptor.ts
   # Include bundled Bun runtime (platform-specific, set by build script)
   - vendor/bun/**/*
+  # Include Codex MCP bridge script (spawned as child process, not bundled)
+  - dist/codex-mcp-bridge-entry.mjs
   # Exclude everything from node_modules (will use extraResources for SDK)
   - "!node_modules/**/*"
 
@@ -38,9 +40,13 @@ extraResources:
     to: app/node_modules/@anthropic-ai/claude-agent-sdk
     filter:
       - "**/*"
+  - from: node_modules/@openai/codex-sdk
+    to: app/node_modules/@openai/codex-sdk
+    filter:
+      - "**/*"
 
 extraMetadata:
-  main: dist/main.cjs
+  main: dist/main.mjs
 
 # Auto-update: electron-updater fetches from this URL for update manifests (.yml files)
 publish:

@@ -373,6 +373,15 @@ export interface AgentEventUsage {
   costUsd?: number;
   /** Model's context window size in tokens (from SDK modelUsage) */
   contextWindow?: number;
+  /**
+   * How to interpret inputTokens:
+   *   - "absolute" (default): value IS the current context size — replaces stored inputTokens.
+   *     Used by Claude where each API response reports the full conversation input.
+   *   - "cumulative": value is the running total of all input tokens consumed in the session.
+   *     The session manager stores the raw value. Used by Codex where the SDK reports a
+   *     monotonically-increasing total that naturally handles compaction/resets.
+   */
+  inputTokensMode?: "absolute" | "cumulative";
 }
 
 /**
@@ -396,7 +405,7 @@ export type AgentEvent =
   | { type: 'task_progress'; toolUseId: string; elapsedSeconds: number; turnId?: string }
   | { type: 'shell_killed'; shellId: string; turnId?: string }
   | { type: 'source_activated'; sourceSlug: string; originalMessage: string }
-  | { type: 'usage_update'; usage: Pick<AgentEventUsage, 'inputTokens' | 'contextWindow'> };
+  | { type: 'usage_update'; usage: Pick<AgentEventUsage, 'inputTokens' | 'contextWindow' | 'inputTokensMode'> };
 
 /**
  * Generate a unique message ID

@@ -22,6 +22,7 @@ export interface ConfigDefaults {
     thinkingLevel: ThinkingLevel;
     permissionMode: PermissionMode;
     cyclablePermissionModes: PermissionMode[];
+    provider: string;
     localMcpServers: {
       enabled: boolean;
     };
@@ -47,6 +48,7 @@ export const BUNDLED_CONFIG_DEFAULTS: ConfigDefaults = {
     thinkingLevel: 'think',
     permissionMode: 'safe', // NEW: was 'ask' before
     cyclablePermissionModes: ['safe', 'ask', 'allow-all'],
+    provider: 'claude',
     localMcpServers: {
       enabled: true,
     },

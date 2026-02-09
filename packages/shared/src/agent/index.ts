@@ -2,6 +2,19 @@ export * from './craft-agent.ts';
 export * from './errors.ts';
 export * from './options.ts';
 
+export {
+  type AgentProvider,
+  type ProviderType,
+  type ProviderFeature,
+  type ChatExecutionConfig,
+  type MessageDelivery,
+  type ProviderCapabilities,
+  ClaudeAgent,
+  createProvider,
+  getSupportedProviders,
+  getProviderDisplayName,
+} from './providers/index.ts';
+
 // Export session-scoped-tools - tools scoped to a specific session
 export {
   // Tool factories (creates session-scoped tools)

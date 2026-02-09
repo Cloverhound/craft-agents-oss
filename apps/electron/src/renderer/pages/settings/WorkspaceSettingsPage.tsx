@@ -61,6 +61,7 @@ export default function WorkspaceSettingsPage() {
   const [wsIconUrl, setWsIconUrl] = useState<string | null>(null)
   const [isUploadingIcon, setIsUploadingIcon] = useState(false)
   const [wsModel, setWsModel] = useState('claude-sonnet-4-5-20250929')
+  const [wsProvider, setWsProvider] = useState('claude')
   const [wsThinkingLevel, setWsThinkingLevel] = useState<ThinkingLevel>(DEFAULT_THINKING_LEVEL)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask')
   const [workingDirectory, setWorkingDirectory] = useState('')
@@ -93,6 +94,7 @@ export default function WorkspaceSettingsPage() {
           setWsName(settings.name || '')
           setWsNameEditing(settings.name || '')
           setWsModel(settings.model || 'claude-sonnet-4-5-20250929')
+          setWsProvider(settings.provider || 'claude')
           setWsThinkingLevel(settings.thinkingLevel || DEFAULT_THINKING_LEVEL)
           setPermissionMode(settings.permissionMode || 'ask')
           setWorkingDirectory(settings.workingDirectory || '')
@@ -216,6 +218,14 @@ export default function WorkspaceSettingsPage() {
       onModelChange?.(newModel)
     },
     [updateWorkspaceSetting, onModelChange]
+  )
+
+  const handleProviderChange = useCallback(
+    async (newProvider: string) => {
+      setWsProvider(newProvider)
+      await updateWorkspaceSetting('provider', newProvider)
+    },
+    [updateWorkspaceSetting]
   )
 
   const handleThinkingLevelChange = useCallback(
@@ -412,9 +422,19 @@ export default function WorkspaceSettingsPage() {
               />
             </SettingsSection>
 
-            {/* Model */}
-            <SettingsSection title="Model">
+            {/* Provider & Model */}
+            <SettingsSection title="Provider & Model">
               <SettingsCard>
+                <SettingsMenuSelectRow
+                  label="Default provider"
+                  description="AI provider for new chats"
+                  value={wsProvider}
+                  onValueChange={handleProviderChange}
+                  options={[
+                    { value: 'claude', label: 'Claude (Anthropic)', description: 'Anthropic Claude models' },
+                    { value: 'codex', label: 'Codex (OpenAI)', description: 'OpenAI Codex models' },
+                  ]}
+                />
                 {/* When a custom API connection is active, model is fixed — show info instead of selector */}
                 {customModel ? (
                   <SettingsRow
@@ -429,13 +449,23 @@ export default function WorkspaceSettingsPage() {
                     description="AI model for new chats"
                     value={wsModel}
                     onValueChange={handleModelChange}
-                    options={[
-                      { value: 'claude-opus-4-6', label: 'Opus 4.6', description: 'Most capable for complex work' },
-                      { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5', description: 'Best for everyday tasks' },
-                      { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fastest for quick answers' },
-                    ]}
+                    options={
+                      wsProvider === 'codex'
+                        ? [
+                            { value: 'codex-1', label: 'Codex 1', description: 'OpenAI Codex agent' },
+                            { value: 'gpt-4.1', label: 'GPT-4.1', description: 'General-purpose' },
+                            { value: 'o3', label: 'o3', description: 'Reasoning model' },
+                          ]
+                        : [
+                            { value: 'claude-opus-4-6', label: 'Opus 4.6', description: 'Most capable for complex work' },
+                            { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5', description: 'Best for everyday tasks' },
+                            { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fastest for quick answers' },
+                          ]
+                    }
                   />
                 )}
+                {/* Thinking level — only for Claude provider */}
+                {wsProvider !== 'codex' && (
                 <SettingsMenuSelectRow
                   label="Thinking level"
                   description="Reasoning depth for new chats"
@@ -447,6 +477,7 @@ export default function WorkspaceSettingsPage() {
                     description,
                   }))}
                 />
+                )}
               </SettingsCard>
             </SettingsSection>
 

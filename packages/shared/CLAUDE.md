@@ -57,12 +57,36 @@ src/
 ## Key Concepts
 
 ### CraftAgent (`src/agent/craft-agent.ts`)
-The main agent class that wraps the Claude Agent SDK. Handles:
+The main agent class that wraps the AI provider SDK. Handles:
 - MCP server connections
 - Tool permissions via PreToolUse hook
 - Large result summarization via PostToolUse hook
 - Permission mode integration (safe/ask/allow-all)
 - Session continuity
+- Multi-provider support (Claude, Codex)
+
+### Multi-Provider Support (`src/agent/providers/`)
+CraftAgent supports multiple AI providers via a unified `AgentProvider` interface:
+
+- **Claude** (`providers/claude/`) — via `@anthropic-ai/claude-agent-sdk`
+- **Codex** (`providers/codex/`) — via `@openai/codex-sdk`
+
+Provider is **immutable per session** (set at creation time, never changed mid-session).
+This avoids compaction/context issues since each SDK maintains its own conversation state.
+
+**Key files:**
+- `providers/types.ts` — `AgentProvider` interface, `ChatExecutionConfig`, `ProviderType`
+- `providers/factory.ts` — `createProvider()`, `getSupportedProviders()`
+- `providers/claude/claude-agent.ts` — Claude implementation
+- `providers/codex/codex-agent.ts` — Codex implementation
+- `providers/codex/event-normalizer.ts` — Codex ThreadEvent → AgentEvent mapping
+
+**Adding a new provider:**
+1. Implement `AgentProvider` interface in a new `providers/{name}/` directory
+2. Add to `factory.ts`
+3. Implement event normalization (SDK events → `AgentEvent`)
+4. Add models to `config/models.ts`
+5. Add to UI model/provider selectors
 
 ### Permission Modes (`src/agent/mode-manager.ts`, `mode-types.ts`)
 Three-level permission system per session:
@@ -147,6 +171,7 @@ Sources are external data connections (MCP servers, APIs, local filesystems). St
 
 - `@craft-agent/core` - Shared types
 - `@anthropic-ai/claude-agent-sdk` - Claude Agent SDK
+- `@openai/codex-sdk` - OpenAI Codex SDK
 
 ## Type Checking
 

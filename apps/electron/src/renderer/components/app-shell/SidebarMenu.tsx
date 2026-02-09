@@ -22,6 +22,8 @@ import {
   Plus,
   Trash2,
   ExternalLink,
+  Sparkles,
+  Code2,
 } from 'lucide-react'
 import { useMenuComponents } from '@/components/ui/menu-context'
 import { getDocUrl, type DocFeature } from '@craft-agent/shared/docs/doc-links'
@@ -55,6 +57,8 @@ export interface SidebarMenuProps {
   viewId?: string
   /** Handler for "Delete View" action */
   onDeleteView?: (id: string) => void
+  /** Handler for creating a new chat with a specific provider */
+  onNewChatWithProvider?: (provider: string) => void
 }
 
 /**
@@ -75,17 +79,33 @@ export function SidebarMenu({
   onConfigureViews,
   viewId,
   onDeleteView,
+  onNewChatWithProvider,
 }: SidebarMenuProps) {
   // Get menu components from context (works with both DropdownMenu and ContextMenu)
   const { MenuItem, Separator } = useMenuComponents()
 
-  // New Chat: only shows "Open in New Window"
+  // New Chat: provider shortcuts + "Open in New Window"
   if (type === 'newChat') {
     return (
-      <MenuItem onClick={() => window.electronAPI.openUrl('craftagents://action/new-chat?window=focused')}>
-        <AppWindow className="h-3.5 w-3.5" />
-        <span className="flex-1">Open in New Window</span>
-      </MenuItem>
+      <>
+        {onNewChatWithProvider && (
+          <>
+            <MenuItem onClick={() => onNewChatWithProvider("claude")}>
+              <Sparkles className="h-3.5 w-3.5" />
+              <span className="flex-1">New Claude Chat</span>
+            </MenuItem>
+            <MenuItem onClick={() => onNewChatWithProvider("codex")}>
+              <Code2 className="h-3.5 w-3.5" />
+              <span className="flex-1">New Codex Chat</span>
+            </MenuItem>
+            <Separator />
+          </>
+        )}
+        <MenuItem onClick={() => window.electronAPI.openUrl('craftagents://action/new-chat?window=focused')}>
+          <AppWindow className="h-3.5 w-3.5" />
+          <span className="flex-1">Open in New Window</span>
+        </MenuItem>
+      </>
     )
   }
 

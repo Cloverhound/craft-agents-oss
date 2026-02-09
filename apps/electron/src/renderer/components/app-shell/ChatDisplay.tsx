@@ -1574,6 +1574,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
               onUltrathinkChange={onUltrathinkChange}
               permissionMode={permissionMode}
               onPermissionModeChange={onPermissionModeChange}
+              provider={session.provider}
               tasks={backgroundTasks}
               sessionId={session.id}
               onKillTask={(taskId) => killTask(taskId, backgroundTasks.find(t => t.id === taskId)?.type ?? 'shell')}
@@ -1648,6 +1649,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                 inputTokens: session.tokenUsage?.inputTokens,
                 contextWindow: session.tokenUsage?.contextWindow,
               }}
+              provider={session.provider}
             />
           </div>
           </div>

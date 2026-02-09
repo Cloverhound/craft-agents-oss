@@ -67,13 +67,15 @@ export function handleComplete(
     })
   }
 
+  updatedMessages = updatedMessages.filter(m => m.role !== 'status')
+
   return {
     state: {
       session: {
         ...session,
         messages: updatedMessages,
         isProcessing: false,
-        currentStatus: undefined,  // Clear any lingering status
+        currentStatus: undefined,
         // Update tokenUsage from complete event (for real-time context counter updates)
         tokenUsage: event.tokenUsage ?? session.tokenUsage,
         // Update hasUnread flag from main process (state machine for NEW badge)
@@ -95,12 +97,14 @@ export function handleError(
 ): ProcessResult {
   const { session } = state
 
-  // Fail-safe: Mark any running tools as failed
-  const messagesWithFailedTools = session.messages.map(m =>
-    m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error'
-      ? { ...m, toolStatus: 'error' as const, toolResult: 'Error occurred', isError: true }
-      : m
-  )
+  // Fail-safe: Mark any running tools as failed, remove transient status messages
+  const messagesWithFailedTools = session.messages
+    .filter(m => m.role !== 'status')
+    .map(m =>
+      m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error'
+        ? { ...m, toolStatus: 'error' as const, toolResult: 'Error occurred', isError: true }
+        : m
+    )
 
   const errorMessage: Message = {
     id: generateMessageId(),
@@ -115,7 +119,7 @@ export function handleError(
         ...session,
         messages: [...messagesWithFailedTools, errorMessage],
         isProcessing: false,
-        currentStatus: undefined,  // Clear any lingering status
+        currentStatus: undefined,
       },
       streaming: null,
     },
@@ -132,12 +136,14 @@ export function handleTypedError(
 ): ProcessResult {
   const { session } = state
 
-  // Fail-safe: Mark any running tools as failed
-  const messagesWithFailedTools = session.messages.map(m =>
-    m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error'
-      ? { ...m, toolStatus: 'error' as const, toolResult: 'Error occurred', isError: true }
-      : m
-  )
+  // Fail-safe: Mark any running tools as failed, remove transient status messages
+  const messagesWithFailedTools = session.messages
+    .filter(m => m.role !== 'status')
+    .map(m =>
+      m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error'
+        ? { ...m, toolStatus: 'error' as const, toolResult: 'Error occurred', isError: true }
+        : m
+    )
 
   const errorMessage: Message = {
     id: generateMessageId(),
@@ -159,7 +165,7 @@ export function handleTypedError(
         ...session,
         messages: [...messagesWithFailedTools, errorMessage],
         isProcessing: false,
-        currentStatus: undefined,  // Clear any lingering status
+        currentStatus: undefined,
       },
       streaming: null,
     },
@@ -169,7 +175,9 @@ export function handleTypedError(
 
 /**
  * Handle status - status message (e.g., compacting)
- * Stores on session for ProcessingIndicator AND appends as message for TurnCard activity
+ * Stores on session for ProcessingIndicator AND manages inline status message.
+ * If a status message already exists, updates it in-place (avoids stacking
+ * multiple spinner entries when Codex emits reasoning updates mid-turn).
  */
 export function handleStatus(
   state: SessionState,
@@ -177,21 +185,32 @@ export function handleStatus(
 ): ProcessResult {
   const { session, streaming } = state
 
-  const statusMessage: Message = {
-    id: generateMessageId(),
-    role: 'status',
-    content: event.message,
-    timestamp: Date.now(),
-    statusType: event.statusType,
-  }
+  const existingIndex = session.messages.findLastIndex(m => m.role === "status")
 
-  const updatedSession = appendMessage(session, statusMessage)
+  let updatedSession: Session
+  if (existingIndex >= 0) {
+    const messages = [...session.messages]
+    messages[existingIndex] = {
+      ...messages[existingIndex],
+      content: event.message,
+      statusType: event.statusType,
+    }
+    updatedSession = { ...session, messages }
+  } else {
+    const statusMessage: Message = {
+      id: generateMessageId(),
+      role: 'status',
+      content: event.message,
+      timestamp: Date.now(),
+      statusType: event.statusType,
+    }
+    updatedSession = appendMessage(session, statusMessage)
+  }
 
   return {
     state: {
       session: {
         ...updatedSession,
-        // Also store on session for ProcessingIndicator
         currentStatus: {
           message: event.message,
           statusType: event.statusType,
