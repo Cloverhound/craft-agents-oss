@@ -6,17 +6,30 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { CodexAgent } from "../providers/codex/codex-agent.ts";
-import {
-  convertThreadEvent,
-  convertThreadStarted,
-  convertTurnStarted,
-  convertTurnCompleted,
-  convertTurnFailed,
-  convertThreadError,
-  convertItemStarted,
-  convertItemCompleted,
-} from "../providers/codex/event-normalizer.ts";
+import { CodexAgent, mapPermissionMode, buildPermissionContext } from "../providers/codex/codex-agent.ts";
+import { convertThreadEvent } from "../providers/codex/event-normalizer.ts";
+
+function convertThreadStarted(ev: { type: "thread.started"; thread_id: string }) {
+  return convertThreadEvent(ev);
+}
+function convertTurnStarted() {
+  return convertThreadEvent({ type: "turn.started" } as any);
+}
+function convertTurnCompleted(ev: { type: "turn.completed"; usage: any }) {
+  return convertThreadEvent(ev);
+}
+function convertTurnFailed(ev: { type: "turn.failed"; error: { message: string } }) {
+  return convertThreadEvent(ev);
+}
+function convertThreadError(ev: { type: "error"; message: string }) {
+  return convertThreadEvent(ev as any);
+}
+function convertItemStarted(ev: { type: "item.started"; item: any }) {
+  return convertThreadEvent(ev as any);
+}
+function convertItemCompleted(ev: { type: "item.completed"; item: any }) {
+  return convertThreadEvent(ev as any);
+}
 import {
   isCodexModel,
   isClaudeModel,
@@ -173,6 +186,106 @@ describe("CodexAgent", () => {
   it("getStreamHealthTriggered returns false", () => {
     const agent = new CodexAgent();
     expect(agent.getStreamHealthTriggered()).toBe(false);
+  });
+});
+
+// ============================================================================
+// Codex Permission Mapping Tests
+// ============================================================================
+
+describe("Codex Permission Mapping", () => {
+  it("maps Execute (allow-all) to danger-full-access + never", () => {
+    const result = mapPermissionMode("allow-all");
+    expect(result.sandboxMode).toBe("danger-full-access");
+    expect(result.approvalPolicy).toBe("never");
+  });
+
+  it("maps Ask to workspace-write + on-failure", () => {
+    const result = mapPermissionMode("ask");
+    expect(result.sandboxMode).toBe("workspace-write");
+    expect(result.approvalPolicy).toBe("on-failure");
+  });
+
+  it("maps Explore (safe) to read-only + on-failure", () => {
+    const result = mapPermissionMode("safe");
+    expect(result.sandboxMode).toBe("read-only");
+    expect(result.approvalPolicy).toBe("on-failure");
+  });
+
+  it("defaults to Explore (read-only) for undefined mode", () => {
+    const result = mapPermissionMode(undefined);
+    expect(result.sandboxMode).toBe("read-only");
+    expect(result.approvalPolicy).toBe("on-failure");
+  });
+
+  it("defaults to Explore (read-only) for unknown mode strings", () => {
+    const result = mapPermissionMode("unknown-mode");
+    expect(result.sandboxMode).toBe("read-only");
+    expect(result.approvalPolicy).toBe("on-failure");
+  });
+});
+
+// ============================================================================
+// Codex Permission Context Tests
+// ============================================================================
+
+describe("buildPermissionContext", () => {
+  it("wraps output in <session_context> XML tags", () => {
+    const ctx = buildPermissionContext("safe");
+    expect(ctx.startsWith("<session_context>")).toBe(true);
+    expect(ctx.endsWith("</session_context>")).toBe(true);
+  });
+
+  it("includes Explore mode name and read-only description for safe", () => {
+    const ctx = buildPermissionContext("safe");
+    expect(ctx).toContain("permissionMode: Explore");
+    expect(ctx).toContain("Read-only access");
+  });
+
+  it("includes Ask mode name and workspace-write description", () => {
+    const ctx = buildPermissionContext("ask");
+    expect(ctx).toContain("permissionMode: Ask");
+    expect(ctx).toContain("Workspace-write access");
+  });
+
+  it("includes Execute mode name and full access description", () => {
+    const ctx = buildPermissionContext("allow-all");
+    expect(ctx).toContain("permissionMode: Execute");
+    expect(ctx).toContain("Full access");
+  });
+
+  it("instructs model not to retry on permission errors", () => {
+    for (const mode of ["safe", "ask", "allow-all"]) {
+      const ctx = buildPermissionContext(mode);
+      expect(ctx).toContain("do NOT retry");
+    }
+  });
+
+  it("suggests mode switch via SHIFT+TAB", () => {
+    const ctx = buildPermissionContext("safe");
+    expect(ctx).toContain("SHIFT+TAB");
+  });
+
+  it("suggests Ask or Execute for Explore mode", () => {
+    const ctx = buildPermissionContext("safe");
+    expect(ctx).toContain("Ask or Execute");
+  });
+
+  it("suggests Execute for Ask mode", () => {
+    const ctx = buildPermissionContext("ask");
+    expect(ctx).toContain("Execute mode (SHIFT+TAB)");
+    expect(ctx).not.toContain("Ask or Execute");
+  });
+
+  it("defaults to Explore context for undefined mode", () => {
+    const ctx = buildPermissionContext(undefined);
+    expect(ctx).toContain("permissionMode: Explore");
+    expect(ctx).toContain("Read-only access");
+  });
+
+  it("mentions Craft allowlists are not enforced in Codex mode", () => {
+    const ctx = buildPermissionContext("safe");
+    expect(ctx).toContain("not enforced in Codex mode");
   });
 });
 

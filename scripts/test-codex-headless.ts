@@ -262,7 +262,25 @@ await runTest(
 );
 
 // ============================================================
-// Test 9-13: Multi-turn with tools and skills across turns
+// Test 9: Sandbox mode — Execute allows out-of-workspace read
+// ============================================================
+await runTest(
+  "Sandbox mode (Execute): out-of-workspace read",
+  "Read the file /etc/hosts and tell me the first non-comment line. Just show that one line.",
+  { policy: "allow-all", expectResponseContains: ["localhost"] },
+);
+
+// ============================================================
+// Test 10: Sandbox mode — Explore blocks writes
+// ============================================================
+await runTest(
+  "Sandbox mode (Explore): blocked write",
+  "Try to create a file called /tmp/_codex_sandbox_test.txt with the text 'hello'. Tell me if it succeeded or was blocked.",
+  { policy: "deny-all" },
+);
+
+// ============================================================
+// Test 11-15: Multi-turn with tools and skills across turns
 // ============================================================
 {
   const sessionId = `multiturn-${Date.now()}`;
