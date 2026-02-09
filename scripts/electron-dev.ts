@@ -323,6 +323,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Copy bridge entry script for Codex MCP bridge
+  const bridgeSrc = join(ROOT_DIR, "packages/shared/src/mcp/codex-mcp-bridge-entry.mjs");
+  const bridgeDest = join(DIST_DIR, "codex-mcp-bridge-entry.mjs");
+  if (existsSync(bridgeSrc)) {
+    cpSync(bridgeSrc, bridgeDest);
+    console.log("📋 Copied codex-mcp-bridge-entry.mjs to dist/");
+  }
+
   console.log("✅ Initial build complete and verified\n");
 
   // =========================================================

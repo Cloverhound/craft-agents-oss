@@ -474,16 +474,22 @@ export class CraftAgent {
     });
 
     // Register session-scoped tool callbacks
-    registerSessionScopedToolCallbacks(sessionId, {
-      onPlanSubmitted: (planPath) => {
+    const toolCallbacks = {
+      onPlanSubmitted: (planPath: string) => {
         this.onDebug?.(`[CraftAgent] onPlanSubmitted received: ${planPath}`);
         this.onPlanSubmitted?.(planPath);
       },
-      onAuthRequest: (request) => {
+      onAuthRequest: (request: AuthRequest) => {
         this.onDebug?.(`[CraftAgent] onAuthRequest received: ${request.sourceSlug} (type: ${request.type})`);
         this.onAuthRequest?.(request);
       },
-    });
+    };
+    registerSessionScopedToolCallbacks(sessionId, toolCallbacks);
+
+    // Wire callbacks to Codex provider's session bridge
+    if (this.provider.type === "codex" && "setSessionToolCallbacks" in this.provider) {
+      (this.provider as any).setSessionToolCallbacks(toolCallbacks);
+    }
 
     // Set workspace root path env var for credential proxy and other tools
     process.env.CRAFT_WORKSPACE_ROOT = this.workspaceRootPath;
