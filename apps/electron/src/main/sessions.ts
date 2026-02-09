@@ -3899,10 +3899,9 @@ To view this task's output:
         break
 
       case 'complete':
-        // Complete event from CraftAgent - accumulate usage from this turn
+        // Complete event from CraftAgent - update usage from this turn
         // Actual 'complete' sent to renderer comes from the finally block in sendMessage
         if (event.usage) {
-          // Initialize tokenUsage if not set
           if (!managed.tokenUsage) {
             managed.tokenUsage = {
               inputTokens: 0,
@@ -3912,17 +3911,28 @@ To view this task's output:
               costUsd: 0,
             }
           }
-          // inputTokens = current context size (full conversation sent this turn), NOT accumulated
-          // Each API call sends the full conversation history, so we use the latest value
-          managed.tokenUsage.inputTokens = event.usage.inputTokens
-          // outputTokens and costUsd are accumulated across all turns (total session usage)
-          managed.tokenUsage.outputTokens += event.usage.outputTokens
-          managed.tokenUsage.totalTokens = managed.tokenUsage.inputTokens + managed.tokenUsage.outputTokens
-          managed.tokenUsage.costUsd += event.usage.costUsd ?? 0
-          // Cache tokens reflect current state, not accumulated
-          managed.tokenUsage.cacheReadTokens = event.usage.cacheReadTokens ?? 0
-          managed.tokenUsage.cacheCreationTokens = event.usage.cacheCreationTokens ?? 0
-          // Update context window (use latest value - may change if model switches)
+
+          const isCumulative = event.usage.inputTokensMode === "cumulative"
+
+          if (isCumulative) {
+            // Cumulative mode (Codex): ALL usage fields are running session totals from the SDK.
+            // Replace everything directly — no delta math, robust against server-side compaction.
+            managed.tokenUsage.inputTokens = event.usage.inputTokens
+            managed.tokenUsage.outputTokens = event.usage.outputTokens
+            managed.tokenUsage.totalTokens = event.usage.inputTokens + event.usage.outputTokens
+            managed.tokenUsage.cacheReadTokens = event.usage.cacheReadTokens ?? 0
+            managed.tokenUsage.cacheCreationTokens = event.usage.cacheCreationTokens ?? 0
+          } else {
+            // Absolute mode (Claude, default): inputTokens is the current context size (replace),
+            // outputTokens/costUsd are per-turn values that accumulate across turns.
+            managed.tokenUsage.inputTokens = event.usage.inputTokens
+            managed.tokenUsage.outputTokens += event.usage.outputTokens
+            managed.tokenUsage.totalTokens = managed.tokenUsage.inputTokens + managed.tokenUsage.outputTokens
+            managed.tokenUsage.costUsd += event.usage.costUsd ?? 0
+            managed.tokenUsage.cacheReadTokens = event.usage.cacheReadTokens ?? 0
+            managed.tokenUsage.cacheCreationTokens = event.usage.cacheCreationTokens ?? 0
+          }
+
           if (event.usage.contextWindow) {
             managed.tokenUsage.contextWindow = event.usage.contextWindow
           }

@@ -169,7 +169,9 @@ export function handleTypedError(
 
 /**
  * Handle status - status message (e.g., compacting)
- * Stores on session for ProcessingIndicator AND appends as message for TurnCard activity
+ * Stores on session for ProcessingIndicator AND manages inline status message.
+ * If a status message already exists, updates it in-place (avoids stacking
+ * multiple spinner entries when Codex emits reasoning updates mid-turn).
  */
 export function handleStatus(
   state: SessionState,
@@ -177,21 +179,32 @@ export function handleStatus(
 ): ProcessResult {
   const { session, streaming } = state
 
-  const statusMessage: Message = {
-    id: generateMessageId(),
-    role: 'status',
-    content: event.message,
-    timestamp: Date.now(),
-    statusType: event.statusType,
-  }
+  const existingIndex = session.messages.findLastIndex(m => m.role === "status")
 
-  const updatedSession = appendMessage(session, statusMessage)
+  let updatedSession: Session
+  if (existingIndex >= 0) {
+    const messages = [...session.messages]
+    messages[existingIndex] = {
+      ...messages[existingIndex],
+      content: event.message,
+      statusType: event.statusType,
+    }
+    updatedSession = { ...session, messages }
+  } else {
+    const statusMessage: Message = {
+      id: generateMessageId(),
+      role: 'status',
+      content: event.message,
+      timestamp: Date.now(),
+      statusType: event.statusType,
+    }
+    updatedSession = appendMessage(session, statusMessage)
+  }
 
   return {
     state: {
       session: {
         ...updatedSession,
-        // Also store on session for ProcessingIndicator
         currentStatus: {
           message: event.message,
           statusType: event.statusType,

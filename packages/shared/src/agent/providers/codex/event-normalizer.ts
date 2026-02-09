@@ -5,8 +5,9 @@
  * used by CraftAgent and the rest of the application.
  *
  * Key differences from the Claude normalizer:
- *   - Codex SDK reports cumulative input_tokens across all turns in a session,
- *     so we track the running total and emit only the per-turn delta as inputTokens.
+ *   - Codex SDK reports cumulative input_tokens across all turns in a session.
+ *     We pass the raw value through with inputTokensMode: "cumulative" so
+ *     the session manager can store it directly without fragile delta math.
  *   - Codex emits multiple agent_message items per turn (interleaved with tool use).
  *     We buffer text_complete events and mark earlier ones as isIntermediate: true
  *     (only the last text before turn.completed gets isIntermediate: false).
@@ -36,7 +37,6 @@ import { getModelContextWindow } from "../../../config/models.ts";
 
 let itemCounter = 0;
 let resolvedContextWindow: number | undefined;
-let cumulativeInputTokens = 0;
 let pendingText: { text: string; turnId?: string } | null = null;
 const emittedTextLength = new Map<string, number>();
 
@@ -50,7 +50,6 @@ export function setCodexModel(modelId: string): void {
 
 export function resetCodexNormalizerState(): void {
   itemCounter = 0;
-  cumulativeInputTokens = 0;
   pendingText = null;
   emittedTextLength.clear();
 }
@@ -88,14 +87,12 @@ export function convertThreadEvent(event: ThreadEvent): AgentEvent[] {
       results.push(...flushPendingText(false));
       emittedTextLength.clear();
 
-      const turnInputTokens = event.usage.input_tokens - cumulativeInputTokens;
-      cumulativeInputTokens = event.usage.input_tokens;
-
       const usage: AgentEventUsage = {
-        inputTokens: turnInputTokens,
+        inputTokens: event.usage.input_tokens,
         outputTokens: event.usage.output_tokens,
         cacheReadTokens: event.usage.cached_input_tokens,
         contextWindow: resolvedContextWindow,
+        inputTokensMode: "cumulative",
       };
       results.push({ type: "complete", usage });
       break;
@@ -226,7 +223,8 @@ function convertReasoning(
   phase: "started" | "updated" | "completed"
 ): AgentEvent[] {
   if (phase === "completed" && item.text) {
-    return [{ type: "info", message: item.text }];
+    const cleaned = item.text.replace(/\*\*/g, "");
+    return [{ type: "status", message: cleaned }];
   }
   return [];
 }
