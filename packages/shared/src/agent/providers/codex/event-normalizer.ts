@@ -3,6 +3,15 @@
  *
  * Maps Codex SDK streaming events to the provider-agnostic AgentEvent union
  * used by CraftAgent and the rest of the application.
+ *
+ * Key differences from the Claude normalizer:
+ *   - Codex SDK reports cumulative input_tokens across all turns in a session,
+ *     so we track the running total and emit only the per-turn delta as inputTokens.
+ *   - Codex emits multiple agent_message items per turn (interleaved with tool use).
+ *     We buffer text_complete events and mark earlier ones as isIntermediate: true
+ *     (only the last text before turn.completed gets isIntermediate: false).
+ *   - For item.updated events on agent_message, item.text contains the full
+ *     accumulated text (not a delta). We track per-item offsets to emit true deltas.
  */
 
 import type {
@@ -23,57 +32,122 @@ import type {
   ErrorItem,
 } from "@openai/codex-sdk";
 import type { AgentEvent, AgentEventUsage } from "@craft-agent/core/types";
+import { getModelContextWindow } from "../../../config/models.ts";
 
 let itemCounter = 0;
+let resolvedContextWindow: number | undefined;
+let cumulativeInputTokens = 0;
+let pendingText: { text: string; turnId?: string } | null = null;
+const emittedTextLength = new Map<string, number>();
 
 function nextToolUseId(): string {
   return `codex-tool-${Date.now()}-${++itemCounter}`;
 }
 
-export function convertThreadStarted(event: ThreadStartedEvent): AgentEvent[] {
-  return [{ type: "status", message: "Codex thread started" }];
+export function setCodexModel(modelId: string): void {
+  resolvedContextWindow = getModelContextWindow(modelId);
 }
 
-export function convertTurnStarted(): AgentEvent[] {
-  return [{ type: "status", message: "Processing..." }];
+export function resetCodexNormalizerState(): void {
+  itemCounter = 0;
+  cumulativeInputTokens = 0;
+  pendingText = null;
+  emittedTextLength.clear();
 }
 
-export function convertTurnCompleted(event: TurnCompletedEvent): AgentEvent[] {
-  const usage: AgentEventUsage = {
-    inputTokens: event.usage.input_tokens,
-    outputTokens: event.usage.output_tokens,
-    cacheReadTokens: event.usage.cached_input_tokens,
+function flushPendingText(isIntermediate: boolean): AgentEvent[] {
+  if (!pendingText) return [];
+  const event: AgentEvent = {
+    type: "text_complete",
+    text: pendingText.text,
+    isIntermediate,
   };
-  return [{ type: "complete", usage }];
+  pendingText = null;
+  return [event];
 }
 
-export function convertTurnFailed(event: TurnFailedEvent): AgentEvent[] {
-  return [{
-    type: "typed_error",
-    error: {
-      code: "provider_error",
-      title: "Codex Turn Failed",
-      message: event.error.message,
-      actions: [{ key: "r", label: "Retry", action: "retry" }],
-      canRetry: true,
-    },
-  }];
+/**
+ * Main entry point: converts a Codex ThreadEvent into AgentEvent(s).
+ *
+ * This function manages cross-event state (buffered text, cumulative tokens)
+ * to produce correct isIntermediate flags and per-turn inputTokens.
+ */
+export function convertThreadEvent(event: ThreadEvent): AgentEvent[] {
+  const results: AgentEvent[] = [];
+
+  switch (event.type) {
+    case "thread.started":
+      results.push({ type: "status", message: "Codex thread started" });
+      break;
+
+    case "turn.started":
+      results.push({ type: "status", message: "Processing..." });
+      break;
+
+    case "turn.completed": {
+      results.push(...flushPendingText(false));
+      emittedTextLength.clear();
+
+      const turnInputTokens = event.usage.input_tokens - cumulativeInputTokens;
+      cumulativeInputTokens = event.usage.input_tokens;
+
+      const usage: AgentEventUsage = {
+        inputTokens: turnInputTokens,
+        outputTokens: event.usage.output_tokens,
+        cacheReadTokens: event.usage.cached_input_tokens,
+        contextWindow: resolvedContextWindow,
+      };
+      results.push({ type: "complete", usage });
+      break;
+    }
+
+    case "turn.failed":
+      results.push(...flushPendingText(false));
+      results.push({
+        type: "typed_error",
+        error: {
+          code: "provider_error",
+          title: "Codex Turn Failed",
+          message: event.error.message,
+          actions: [{ key: "r", label: "Retry", action: "retry" }],
+          canRetry: true,
+        },
+      });
+      break;
+
+    case "item.started":
+      results.push(...flushPendingTextIfToolItem(event.item));
+      results.push(...convertItemToEvents(event.item, "started"));
+      break;
+
+    case "item.updated":
+      results.push(...convertItemToEvents(event.item, "updated"));
+      break;
+
+    case "item.completed":
+      results.push(...flushPendingTextIfToolItem(event.item));
+      results.push(...convertItemToEvents(event.item, "completed"));
+      break;
+
+    case "error":
+      results.push(...flushPendingText(false));
+      results.push({ type: "error", message: event.message });
+      break;
+  }
+
+  return results;
 }
 
-export function convertThreadError(event: ThreadErrorEvent): AgentEvent[] {
-  return [{ type: "error", message: event.message }];
-}
-
-export function convertItemStarted(event: ItemStartedEvent): AgentEvent[] {
-  return convertItemToEvents(event.item, "started");
-}
-
-export function convertItemUpdated(event: ItemUpdatedEvent): AgentEvent[] {
-  return convertItemToEvents(event.item, "updated");
-}
-
-export function convertItemCompleted(event: ItemCompletedEvent): AgentEvent[] {
-  return convertItemToEvents(event.item, "completed");
+function flushPendingTextIfToolItem(item: ThreadItem): AgentEvent[] {
+  if (!pendingText) return [];
+  if (item.type === "command_execution" || item.type === "file_change" ||
+      item.type === "mcp_tool_call" || item.type === "web_search") {
+    return flushPendingText(true);
+  }
+  if (item.type === "agent_message") {
+    return flushPendingText(true);
+  }
+  return [];
 }
 
 function convertItemToEvents(
@@ -124,13 +198,25 @@ function convertAgentMessage(
   phase: "started" | "updated" | "completed"
 ): AgentEvent[] {
   if (phase === "started" || phase === "updated") {
-    if (item.text) {
-      return [{ type: "text_delta", text: item.text }];
+    if (!item.text) return [];
+    const prev = emittedTextLength.get(item.id) ?? 0;
+    if (item.text.length > prev) {
+      const delta = item.text.slice(prev);
+      emittedTextLength.set(item.id, item.text.length);
+      return [{ type: "text_delta", text: delta }];
     }
     return [];
   }
   if (phase === "completed") {
-    return [{ type: "text_complete", text: item.text, isIntermediate: false }];
+    const events: AgentEvent[] = [];
+    const prev = emittedTextLength.get(item.id) ?? 0;
+    if (item.text.length > prev) {
+      const delta = item.text.slice(prev);
+      emittedTextLength.set(item.id, item.text.length);
+      events.push({ type: "text_delta", text: delta });
+    }
+    pendingText = { text: item.text };
+    return events;
   }
   return [];
 }
@@ -241,27 +327,4 @@ function convertMcpToolCall(
 
 function convertErrorItem(item: ErrorItem): AgentEvent[] {
   return [{ type: "error", message: item.message }];
-}
-
-export function convertThreadEvent(event: ThreadEvent): AgentEvent[] {
-  switch (event.type) {
-    case "thread.started":
-      return convertThreadStarted(event);
-    case "turn.started":
-      return convertTurnStarted();
-    case "turn.completed":
-      return convertTurnCompleted(event);
-    case "turn.failed":
-      return convertTurnFailed(event);
-    case "item.started":
-      return convertItemStarted(event);
-    case "item.updated":
-      return convertItemUpdated(event);
-    case "item.completed":
-      return convertItemCompleted(event);
-    case "error":
-      return convertThreadError(event);
-    default:
-      return [];
-  }
 }

@@ -23,8 +23,8 @@ import {
 } from "@openai/codex-sdk";
 import type { AgentEvent } from "@craft-agent/core/types";
 import type { AgentProvider, ChatExecutionConfig, ProviderFeature, ProviderSystemPrompt } from "../types.ts";
-import { convertThreadEvent } from "./event-normalizer.ts";
-import { isCodexModel } from "../../../config/models.ts";
+import { convertThreadEvent, setCodexModel, resetCodexNormalizerState } from "./event-normalizer.ts";
+import { isCodexModel, DEFAULT_CODEX_MODEL } from "../../../config/models.ts";
 import { debug } from "../../../utils/debug.ts";
 import { loadAllSkills } from "../../../skills/storage.ts";
 import type { LoadedSkill } from "../../../skills/types.ts";
@@ -154,6 +154,7 @@ export class CodexAgent implements AgentProvider {
       };
 
       this.codex = new Codex(codexOptions);
+      resetCodexNormalizerState();
       debug("[CodexAgent] Created Codex client with context integration");
       debug(`[CodexAgent]   developer_instructions: ${developerInstructions ? `${developerInstructions.length} chars` : "none"}`);
       debug(`[CodexAgent]   skills: ${skills.length} (injected into developer_instructions)`);
@@ -161,6 +162,7 @@ export class CodexAgent implements AgentProvider {
     }
 
     const codexModel = config.model && isCodexModel(config.model) ? config.model : undefined;
+    setCodexModel(codexModel ?? DEFAULT_CODEX_MODEL);
     debug(`[CodexAgent] Model: ${codexModel ?? "(default)"}`);
     const threadOptions: ThreadOptions = {
       model: codexModel,

@@ -26,9 +26,9 @@ export const CLAUDE_MODELS: ModelDefinition[] = [
 ];
 
 export const CODEX_MODELS: ModelDefinition[] = [
-  { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', shortName: 'GPT-5.3 Codex', description: 'Latest Codex agent', provider: 'codex', contextWindow: 192000 },
-  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', shortName: 'GPT-5.2 Codex', description: 'Codex agent', provider: 'codex', contextWindow: 192000 },
-  { id: 'gpt-5.2', name: 'GPT-5.2', shortName: 'GPT-5.2', description: 'General-purpose', provider: 'codex', contextWindow: 1048576 },
+  { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', shortName: 'GPT-5.3 Codex', description: 'Latest Codex agent', provider: 'codex', contextWindow: 400000 },
+  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', shortName: 'GPT-5.2 Codex', description: 'Codex agent', provider: 'codex', contextWindow: 400000 },
+  { id: 'gpt-5.2', name: 'GPT-5.2', shortName: 'GPT-5.2', description: 'General-purpose', provider: 'codex', contextWindow: 400000 },
 ];
 
 export const MODELS: ModelDefinition[] = [
