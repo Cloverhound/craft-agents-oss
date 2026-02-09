@@ -162,25 +162,39 @@ function convertItemToEvents(
       return convertFileChange(item, phase);
     case "mcp_tool_call":
       return convertMcpToolCall(item, phase);
-    case "web_search":
+    case "web_search": {
+      const query = item.query || (item as any).action?.query || "";
       if (phase === "started") {
         return [{
           type: "tool_start",
           toolName: "WebSearch",
           toolUseId: item.id,
-          input: { query: item.query },
+          input: { query },
+          intent: query || undefined,
         }];
       }
       if (phase === "completed") {
-        return [{
+        const events: AgentEvent[] = [];
+        if (query) {
+          events.push({
+            type: "tool_start",
+            toolName: "WebSearch",
+            toolUseId: item.id,
+            input: {},
+            intent: query,
+          });
+        }
+        events.push({
           type: "tool_result",
           toolUseId: item.id,
           toolName: "WebSearch",
-          result: `Web search completed: ${item.query}`,
+          result: `Web search completed: ${query}`,
           isError: false,
-        }];
+        });
+        return events;
       }
       return [];
+    }
     case "todo_list":
       return [];
     case "error":

@@ -3529,6 +3529,7 @@ To view this task's output:
           // Update toolIntent if not already set (second event has intent from complete input)
           if (event.intent && !existingStartMsg.toolIntent) {
             existingStartMsg.toolIntent = event.intent
+            shouldSendEvent = true
           }
           // Update toolDisplayName if not already set
           if (event.displayName && !existingStartMsg.toolDisplayName) {
