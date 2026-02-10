@@ -316,18 +316,22 @@ async function setupCodexSessionConfig(
   // Generate config.toml with enabled sources
   // Bridge server path differs between packaged app and development:
   // - Packaged: resources/bridge-mcp-server/index.js (copied during build)
-  // - Dev: packages/bridge-mcp-server/dist/index.js (built by electron:build:main)
+  // - Dev: packages/bridge-mcp-server/dist/index.js (built/copied by electron:build:main), or fallback to resources when repo has no source
+  const bridgeDistPath = join(process.cwd(), 'packages', 'bridge-mcp-server', 'dist', 'index.js')
+  const bridgeResourcePath = join(process.cwd(), 'apps', 'electron', 'resources', 'bridge-mcp-server', 'index.js')
   const bridgeServerPath = app.isPackaged
     ? join(app.getAppPath(), 'resources', 'bridge-mcp-server', 'index.js')
-    : join(process.cwd(), 'packages', 'bridge-mcp-server', 'dist', 'index.js')
+    : (existsSync(bridgeDistPath) ? bridgeDistPath : bridgeResourcePath)
   const bridgeConfigPath = join(sessionPath, '.codex-home', 'bridge-config.json')
 
   // Session MCP server path - provides session-scoped tools (SubmitPlan, config_validate, etc.)
   // - Packaged: resources/session-mcp-server/index.js (copied during build)
-  // - Dev: packages/session-mcp-server/dist/index.js (built by electron:build:main)
+  // - Dev: packages/session-mcp-server/dist/index.js (built/copied by electron:build:main), or fallback to resources when repo has no source
+  const sessionDistPath = join(process.cwd(), 'packages', 'session-mcp-server', 'dist', 'index.js')
+  const sessionResourcePath = join(process.cwd(), 'apps', 'electron', 'resources', 'session-mcp-server', 'index.js')
   const sessionServerPath = app.isPackaged
     ? join(app.getAppPath(), 'resources', 'session-mcp-server', 'index.js')
-    : join(process.cwd(), 'packages', 'session-mcp-server', 'dist', 'index.js')
+    : (existsSync(sessionDistPath) ? sessionDistPath : sessionResourcePath)
 
   // Check if bridge server exists - if not, log warning and skip bridge config
   // This enables graceful degradation when bridge isn't built (e.g., fresh clone)

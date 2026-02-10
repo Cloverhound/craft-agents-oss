@@ -127,39 +127,50 @@ function copyResources(): void {
   }
 }
 
-// Build MCP servers for Codex sessions (one-time, no watch needed)
+const SESSION_SERVER_SOURCE = join(ROOT_DIR, "packages/session-mcp-server/src/index.ts");
+const SESSION_SERVER_RESOURCE = join(ROOT_DIR, "apps/electron/resources/session-mcp-server/index.js");
+const BRIDGE_SERVER_SOURCE = join(ROOT_DIR, "packages/bridge-mcp-server/src/index.ts");
+const BRIDGE_SERVER_RESOURCE = join(ROOT_DIR, "apps/electron/resources/bridge-mcp-server/index.js");
+
 async function buildMcpServers(): Promise<void> {
   console.log("🌉 Building MCP servers for Codex sessions...");
 
-  // Ensure dist directories exist
   const sessionDistDir = join(SESSION_SERVER_DIR, "dist");
   const bridgeDistDir = join(BRIDGE_SERVER_DIR, "dist");
   if (!existsSync(sessionDistDir)) mkdirSync(sessionDistDir, { recursive: true });
   if (!existsSync(bridgeDistDir)) mkdirSync(bridgeDistDir, { recursive: true });
 
-  // Build both servers in parallel
+  const sessionFromSource = existsSync(SESSION_SERVER_SOURCE);
+  const bridgeFromSource = existsSync(BRIDGE_SERVER_SOURCE);
+
   const [sessionResult, bridgeResult] = await Promise.all([
-    runEsbuild(
-      "packages/session-mcp-server/src/index.ts",
-      "packages/session-mcp-server/dist/index.js"
-    ),
-    runEsbuild(
-      "packages/bridge-mcp-server/src/index.ts",
-      "packages/bridge-mcp-server/dist/index.js"
-    ),
+    sessionFromSource
+      ? runEsbuild("packages/session-mcp-server/src/index.ts", "packages/session-mcp-server/dist/index.js")
+      : Promise.resolve(
+          existsSync(SESSION_SERVER_RESOURCE)
+            ? (cpSync(SESSION_SERVER_RESOURCE, SESSION_SERVER_OUTPUT, { force: true }), { success: true as const })
+            : { success: false as const, error: "No source or pre-built resource" }
+        ),
+    bridgeFromSource
+      ? runEsbuild("packages/bridge-mcp-server/src/index.ts", "packages/bridge-mcp-server/dist/index.js")
+      : Promise.resolve(
+          existsSync(BRIDGE_SERVER_RESOURCE)
+            ? (cpSync(BRIDGE_SERVER_RESOURCE, BRIDGE_SERVER_OUTPUT, { force: true }), { success: true as const })
+            : { success: false as const, error: "No source or pre-built resource" }
+        ),
   ]);
 
   if (!sessionResult.success) {
     console.error("❌ Session MCP server build failed:", sessionResult.error);
     process.exit(1);
   }
-  console.log("✅ Session MCP server built");
+  console.log(sessionFromSource ? "✅ Session MCP server built" : "✅ Session MCP server: using pre-built resource");
 
   if (!bridgeResult.success) {
     console.error("❌ Bridge MCP server build failed:", bridgeResult.error);
     process.exit(1);
   }
-  console.log("✅ Bridge MCP server built");
+  console.log(bridgeFromSource ? "✅ Bridge MCP server built" : "✅ Bridge MCP server: using pre-built resource");
 }
 
 // Get OAuth defines for esbuild API

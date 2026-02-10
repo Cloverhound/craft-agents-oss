@@ -4,7 +4,7 @@
  */
 
 import { spawn } from "bun";
-import { existsSync, readFileSync, statSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, statSync, mkdirSync, cpSync } from "fs";
 import { join } from "path";
 
 const ROOT_DIR = join(import.meta.dir, "..");
@@ -130,20 +130,31 @@ function verifySessionToolsCore(): void {
   console.log("✅ Session tools core verified");
 }
 
-// Build the Bridge MCP Server (used for API sources in Codex sessions)
+const BRIDGE_SERVER_SOURCE = join(BRIDGE_SERVER_DIR, "src/index.ts");
+const BRIDGE_SERVER_RESOURCE = join(ROOT_DIR, "apps/electron/resources/bridge-mcp-server/index.js");
+
 async function buildBridgeServer(): Promise<void> {
   console.log("🌉 Building Bridge MCP Server...");
 
-  // Ensure dist directory exists
   const distDir = join(BRIDGE_SERVER_DIR, "dist");
   if (!existsSync(distDir)) {
     mkdirSync(distDir, { recursive: true });
   }
 
+  if (!existsSync(BRIDGE_SERVER_SOURCE)) {
+    if (existsSync(BRIDGE_SERVER_RESOURCE)) {
+      cpSync(BRIDGE_SERVER_RESOURCE, BRIDGE_SERVER_OUTPUT, { force: true });
+      console.log("✅ Bridge server: using pre-built resource (no source in repo)");
+      return;
+    }
+    console.error("❌ Bridge server source not found at", BRIDGE_SERVER_SOURCE, "and no pre-built resource at", BRIDGE_SERVER_RESOURCE);
+    process.exit(1);
+  }
+
   const proc = spawn({
     cmd: [
       "bun", "build",
-      join(BRIDGE_SERVER_DIR, "src/index.ts"),
+      BRIDGE_SERVER_SOURCE,
       "--outfile", BRIDGE_SERVER_OUTPUT,
       "--target", "node",
       "--format", "cjs",
@@ -160,7 +171,6 @@ async function buildBridgeServer(): Promise<void> {
     process.exit(exitCode);
   }
 
-  // Verify output exists
   if (!existsSync(BRIDGE_SERVER_OUTPUT)) {
     console.error("❌ Bridge server output not found at", BRIDGE_SERVER_OUTPUT);
     process.exit(1);
@@ -169,20 +179,31 @@ async function buildBridgeServer(): Promise<void> {
   console.log("✅ Bridge server built successfully");
 }
 
-// Build the Session MCP Server (provides session-scoped tools like SubmitPlan for Codex sessions)
+const SESSION_SERVER_SOURCE = join(SESSION_SERVER_DIR, "src/index.ts");
+const SESSION_SERVER_RESOURCE = join(ROOT_DIR, "apps/electron/resources/session-mcp-server/index.js");
+
 async function buildSessionServer(): Promise<void> {
   console.log("📋 Building Session MCP Server...");
 
-  // Ensure dist directory exists
   const distDir = join(SESSION_SERVER_DIR, "dist");
   if (!existsSync(distDir)) {
     mkdirSync(distDir, { recursive: true });
   }
 
+  if (!existsSync(SESSION_SERVER_SOURCE)) {
+    if (existsSync(SESSION_SERVER_RESOURCE)) {
+      cpSync(SESSION_SERVER_RESOURCE, SESSION_SERVER_OUTPUT, { force: true });
+      console.log("✅ Session server: using pre-built resource (no source in repo)");
+      return;
+    }
+    console.error("❌ Session server source not found at", SESSION_SERVER_SOURCE, "and no pre-built resource at", SESSION_SERVER_RESOURCE);
+    process.exit(1);
+  }
+
   const proc = spawn({
     cmd: [
       "bun", "build",
-      join(SESSION_SERVER_DIR, "src/index.ts"),
+      SESSION_SERVER_SOURCE,
       "--outfile", SESSION_SERVER_OUTPUT,
       "--target", "node",
       "--format", "cjs",
@@ -199,7 +220,6 @@ async function buildSessionServer(): Promise<void> {
     process.exit(exitCode);
   }
 
-  // Verify output exists
   if (!existsSync(SESSION_SERVER_OUTPUT)) {
     console.error("❌ Session server output not found at", SESSION_SERVER_OUTPUT);
     process.exit(1);
