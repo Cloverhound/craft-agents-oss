@@ -70,6 +70,7 @@ import { parseMentions, stripAllMentions } from '../mentions/index.ts';
 
 // Skills loader for resolving skill paths
 import { loadWorkspaceSkills } from '../skills/storage.ts';
+import type { LoadedSkill } from '../skills/types.ts';
 
 // Path utilities for cross-platform normalization
 import { join, resolve } from 'node:path';
@@ -145,6 +146,25 @@ const THINKING_TO_EFFORT: Record<ThinkingLevel, ReasoningEffort> = {
   think: 'medium',
   max: 'high',
 };
+
+function buildSkillCatalogForCodex(workspaceRoot: string): string {
+  const skills = loadWorkspaceSkills(workspaceRoot);
+  if (skills.length === 0) return '';
+
+  const entries = skills.map((s: LoadedSkill) => {
+    const skillMdPath = join(s.path, 'SKILL.md');
+    return `- **${s.metadata.name}** (${s.slug}): ${s.metadata.description}\n  Path: \`${skillMdPath}\``;
+  });
+
+  return [
+    '\n## Available Skills',
+    '',
+    'The following skills are available in this workspace. To use a skill, read its SKILL.md file for full instructions.',
+    '',
+    ...entries,
+    '',
+  ].join('\n');
+}
 
 // ============================================================
 // CodexAgent Implementation
@@ -1586,7 +1606,7 @@ export class CodexAgent extends BaseAgent {
                   undefined, // preset (default)
                   'Codex' // backend name
                 ),
-            developerInstructions: null,
+            developerInstructions: buildSkillCatalogForCodex(this.config.workspace.rootPath ?? this.workingDirectory) || null,
             personality: null,
           });
           this.debug(`Resumed thread: ${this.codexThreadId}`);
@@ -1623,6 +1643,7 @@ export class CodexAgent extends BaseAgent {
                   undefined, // preset (default)
                   'Codex' // backend name
                 ),
+            developerInstructions: buildSkillCatalogForCodex(this.config.workspace.rootPath ?? this.workingDirectory) || null,
           });
           this.codexThreadId = response.thread.id;
           this.debug(`Started new thread: ${this.codexThreadId}`);
@@ -1646,6 +1667,7 @@ export class CodexAgent extends BaseAgent {
                 undefined, // preset (default)
                 'Codex' // backend name
               ),
+          developerInstructions: buildSkillCatalogForCodex(this.config.workspace.rootPath ?? this.workingDirectory) || null,
         });
         this.codexThreadId = response.thread.id;
         this.debug(`Started new thread: ${this.codexThreadId}`);
@@ -2134,7 +2156,7 @@ export class CodexAgent extends BaseAgent {
                 undefined, // preset (default)
                 'Codex' // backend name
               ),
-          developerInstructions: null,
+          developerInstructions: buildSkillCatalogForCodex(this.config.workspace.rootPath ?? this.workingDirectory) || null,
           personality: null,
         });
         this.debug(`Thread ${threadId} resumed successfully`);
