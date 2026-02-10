@@ -9,10 +9,10 @@
  * primitives, allowing the same component to work in both scenarios.
  *
  * Provides actions based on the sidebar item type:
- * - "Configure Statuses" (for allChats/status/flagged items) - triggers EditPopover callback
+ * - "Configure Statuses" (for allSessions/status/flagged items) - triggers EditPopover callback
  * - "Add Source" (for sources) - triggers EditPopover callback
  * - "Add Skill" (for skills) - triggers EditPopover callback
- * - "Open in New Window" (for newChat only) - uses deep link
+ * - "Open in New Window" (for newSession only) - uses deep link
  */
 
 import * as React from 'react'
@@ -26,7 +26,7 @@ import {
 import { useMenuComponents } from '@/components/ui/menu-context'
 import { getDocUrl, type DocFeature } from '@craft-agent/shared/docs/doc-links'
 
-export type SidebarMenuType = 'allChats' | 'flagged' | 'status' | 'sources' | 'credentials' | 'skills' | 'labels' | 'views' | 'queue' | 'newChat'
+export type SidebarMenuType = 'allSessions' | 'flagged' | 'status' | 'sources' | 'credentials' | 'skills' | 'labels' | 'views' | 'queue' | 'newSession'
 
 export interface SidebarMenuProps {
   /** Type of sidebar item (determines available menu items) */
@@ -35,7 +35,7 @@ export interface SidebarMenuProps {
   statusId?: string
   /** Label ID — when set, this is an individual label item (enables Delete Label) */
   labelId?: string
-  /** Handler for "Configure Statuses" action - only for allChats/status/flagged types */
+  /** Handler for "Configure Statuses" action - only for allSessions/status/flagged types */
   onConfigureStatuses?: () => void
   /** Handler for "Configure Labels" action - receives labelId when triggered from a specific label */
   onConfigureLabels?: (labelId?: string) => void
@@ -79,18 +79,18 @@ export function SidebarMenu({
   // Get menu components from context (works with both DropdownMenu and ContextMenu)
   const { MenuItem, Separator } = useMenuComponents()
 
-  // New Chat: only shows "Open in New Window"
-  if (type === 'newChat') {
+  // New Session: only shows "Open in New Window"
+  if (type === 'newSession') {
     return (
-      <MenuItem onClick={() => window.electronAPI.openUrl('craftagents://action/new-chat?window=focused')}>
+      <MenuItem onClick={() => window.electronAPI.openUrl('craftagents://action/new-session?window=focused')}>
         <AppWindow className="h-3.5 w-3.5" />
         <span className="flex-1">Open in New Window</span>
       </MenuItem>
     )
   }
 
-  // All Chats / Status / Flagged: show "Configure Statuses"
-  if ((type === 'allChats' || type === 'status' || type === 'flagged') && onConfigureStatuses) {
+  // All Sessions / Status / Flagged: show "Configure Statuses"
+  if ((type === 'allSessions' || type === 'status' || type === 'flagged') && onConfigureStatuses) {
     return (
       <MenuItem onClick={onConfigureStatuses}>
         <Settings2 className="h-3.5 w-3.5" />

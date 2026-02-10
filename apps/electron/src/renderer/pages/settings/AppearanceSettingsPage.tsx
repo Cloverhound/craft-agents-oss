@@ -25,6 +25,7 @@ import {
   SettingsSegmentedControl,
   SettingsMenuSelect,
 } from '@/components/settings'
+import { useWorkspaceIcons } from '@/hooks/useWorkspaceIcon'
 import { Info_DataTable, SortableHeader } from '@/components/info/Info_DataTable'
 import { Info_Badge } from '@/components/info/Info_Badge'
 import type { PresetTheme } from '@config/theme'
@@ -92,6 +93,9 @@ const toolIconColumns: ColumnDef<ToolIconMapping>[] = [
 export default function AppearanceSettingsPage() {
   const { mode, setMode, colorTheme, setColorTheme, font, setFont, activeWorkspaceId, setWorkspaceColorTheme } = useTheme()
   const { workspaces } = useAppShellContext()
+
+  // Fetch workspace icons as data URLs (file:// URLs don't work in renderer)
+  const workspaceIconMap = useWorkspaceIcons(workspaces)
 
   // Preset themes for the color theme dropdown
   const [presetThemes, setPresetThemes] = useState<PresetTheme[]>([])
@@ -257,9 +261,9 @@ export default function AppearanceSettingsPage() {
                           key={workspace.id}
                           label={
                             <div className="flex items-center gap-2">
-                              {workspace.iconUrl ? (
+                              {workspaceIconMap.get(workspace.id) ? (
                                 <img
-                                  src={workspace.iconUrl}
+                                  src={workspaceIconMap.get(workspace.id)}
                                   alt=""
                                   className="w-4 h-4 rounded object-cover"
                                 />

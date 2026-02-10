@@ -27,7 +27,7 @@ import { Markdown } from '../markdown'
 import { Spinner } from '../ui/LoadingIndicator'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../tooltip'
 import { parseDiffFromFile, type FileContents } from '@pierre/diffs'
-import { getDiffStats } from '../code-viewer'
+import { getDiffStats, getUnifiedDiffStats } from '../code-viewer'
 import { TurnCardActionsMenu } from './TurnCardActionsMenu'
 import { computeLastChildSet, groupActivitiesByParent, isActivityGroup, formatDuration, formatTokens, deriveTurnPhase, shouldShowThinkingIndicator, type ActivityGroup, type AssistantTurn } from './turn-utils'
 import { DocumentFormattedMarkdownOverlay } from '../overlay'
@@ -72,6 +72,10 @@ function stripMarkdown(text: string): string {
  * Compute diff stats for Edit/Write tool inputs.
  * Uses @pierre/diffs for accurate line-by-line diff calculation.
  *
+ * Supports both:
+ * - Claude Code format: { file_path, old_string, new_string }
+ * - Codex format: { changes: Array<{ path, kind, diff }> }
+ *
  * @param toolName - 'Edit' or 'Write'
  * @param toolInput - The tool input containing old_string/new_string (Edit) or content (Write)
  * @returns { additions, deletions } or null if not applicable
@@ -83,6 +87,24 @@ function computeEditWriteDiffStats(
   if (!toolInput) return null
 
   if (toolName === 'Edit') {
+    // Check for Codex format: { changes: Array<{ path, kind, diff }> }
+    if (toolInput.changes && Array.isArray(toolInput.changes)) {
+      let totalAdditions = 0
+      let totalDeletions = 0
+      for (const change of toolInput.changes as Array<{ path?: string; diff?: string }>) {
+        if (change.diff) {
+          const stats = getUnifiedDiffStats(change.diff, change.path || 'file')
+          if (stats) {
+            totalAdditions += stats.additions
+            totalDeletions += stats.deletions
+          }
+        }
+      }
+      if (totalAdditions === 0 && totalDeletions === 0) return null
+      return { additions: totalAdditions, deletions: totalDeletions }
+    }
+
+    // Claude Code format: { file_path, old_string, new_string }
     const oldString = (toolInput.old_string as string) ?? ''
     const newString = (toolInput.new_string as string) ?? ''
     if (!oldString && !newString) return null
@@ -127,8 +149,8 @@ export const SIZE_CONFIG = {
   spinnerSizeSmall: 'text-[8px]',
   /** Activity row height in pixels (approx for calculation) */
   activityRowHeight: 24,
-  /** Max visible activities before scrolling (show ~14 items) */
-  maxVisibleActivities: 14,
+  /** Max visible activities before scrolling (show ~15 items) */
+  maxVisibleActivities: 15,
   /** Number of items before which we apply staggered animation */
   staggeredAnimationLimit: 10,
 } as const
@@ -138,7 +160,7 @@ export const SIZE_CONFIG = {
 // ============================================================================
 
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
-export type ActivityType = 'tool' | 'thinking' | 'intermediate' | 'status'
+export type ActivityType = 'tool' | 'thinking' | 'intermediate' | 'status' | 'plan'
 
 // ============================================================================
 // Todo Types (for TodoWrite tool visualization)
@@ -454,6 +476,17 @@ function formatToolInput(
   // For Edit/Write tools, only show file_path (skip old_string, new_string, replace_all, content)
   const isEditOrWrite = toolName === 'Edit' || toolName === 'Write'
 
+  // Handle Codex format: { changes: Array<{ path, kind, diff }> }
+  // Extract path from first change if present
+  if (isEditOrWrite && input.changes && Array.isArray(input.changes)) {
+    const firstChange = input.changes[0] as { path?: string } | undefined
+    if (firstChange?.path) {
+      const pathStr = stripSessionFolderPath(firstChange.path, sessionFolderPath)
+      parts.push(pathStr)
+    }
+    return parts.join(' ')
+  }
+
   for (const [key, value] of Object.entries(input)) {
     // Skip meta fields and description (shown separately)
     if (key === '_intent' || key === 'description' || value === undefined || value === null) continue
@@ -474,6 +507,26 @@ function formatToolInput(
     if (parts.length >= 2) break // Max 2 values
   }
   return parts.join(' ')
+}
+
+/**
+ * Extract the action portion from an LLM-provided displayName by stripping
+ * a matching icon/tool prefix.
+ *
+ * Examples:
+ *   extractActionFromDisplayName("Git", "Git Status")  → "Status"
+ *   extractActionFromDisplayName("npm", "Install Deps") → "Install Deps"
+ *   extractActionFromDisplayName("Git", "Check Branch")  → "Check Branch"
+ */
+function extractActionFromDisplayName(iconName: string, llmName: string): string {
+  // If LLM name starts with the icon name, strip the prefix to get the action
+  // "Git Status" with icon "Git" → "Status"
+  if (llmName.toLowerCase().startsWith(iconName.toLowerCase() + ' ')) {
+    return llmName.slice(iconName.length + 1).trim()
+  }
+  // Otherwise use the full LLM name as the action
+  // "Install Dependencies" with icon "npm" → "Install Dependencies"
+  return llmName
 }
 
 /**
@@ -503,6 +556,32 @@ function formatToolDisplay(
         }
       }
     }
+
+    // For Bash commands with LLM-provided displayName: merge icon name + action
+    // e.g., icon "Git" + LLM "Git Status" → "Git: Status"
+    // e.g., icon "npm" + LLM "Install Dependencies" → "npm: Install Dependencies"
+    // Special case: for generic "Terminal", show only the action
+    // e.g., icon "Terminal" + LLM "Install Dependencies" → "Install Dependencies"
+    if (toolName === 'Bash' && displayName) {
+      const iconName = toolDisplayMeta.displayName
+      const action = extractActionFromDisplayName(iconName, displayName)
+      return {
+        name: iconName.toLowerCase() === 'terminal' ? action : `${iconName}: ${action}`,
+        icon: toolDisplayMeta.iconDataUrl,
+        description: toolDisplayMeta.description,
+      }
+    }
+
+    // For native tools with LLM-provided displayName: use the LLM's name
+    // This gives semantic names like "Read Config" instead of generic "Read"
+    if (displayName && toolDisplayMeta.category === 'native') {
+      return {
+        name: displayName,
+        icon: toolDisplayMeta.iconDataUrl,
+        description: toolDisplayMeta.description,
+      }
+    }
+
     return {
       name: toolDisplayMeta.displayName,
       icon: toolDisplayMeta.iconDataUrl,
@@ -910,19 +989,36 @@ function ActivityRow({ activity, onOpenDetails, isLastChild, sessionFolderPath, 
                 style={{ '--shadow-color': 'var(--success-rgb)' } as React.CSSProperties}
               >{diffStats.additions}</span>
             )}
-            {/* Filename badge */}
-            {typeof activity.toolInput?.file_path === 'string' && (
-              <span className="px-1.5 py-0.5 bg-background shadow-minimal rounded-[4px] text-[11px] text-foreground/70">
-                {activity.toolInput.file_path.split('/').pop()}
-              </span>
-            )}
+            {/* Filename badge - supports both Claude Code and Codex formats */}
+            {(() => {
+              // Claude Code format: file_path
+              if (typeof activity.toolInput?.file_path === 'string') {
+                return (
+                  <span className="px-1.5 py-0.5 bg-background shadow-minimal rounded-[4px] text-[11px] text-foreground/70">
+                    {normalizePath(activity.toolInput.file_path).split('/').pop()}
+                  </span>
+                )
+              }
+              // Codex format: changes[0].path
+              if (Array.isArray(activity.toolInput?.changes)) {
+                const firstChange = activity.toolInput.changes[0] as { path?: string } | undefined
+                if (firstChange?.path) {
+                  return (
+                    <span className="px-1.5 py-0.5 bg-background shadow-minimal rounded-[4px] text-[11px] text-foreground/70">
+                      {normalizePath(firstChange.path).split('/').pop()}
+                    </span>
+                  )
+                }
+              }
+              return null
+            })()}
           </span>
         )}
         {/* Filename badge for Read tool (no diff stats) */}
         {!isMcpOrApiTool && !isBackgrounded && !diffStats && activity.toolName === 'Read' && typeof activity.toolInput?.file_path === 'string' && (
           <span className="flex items-center gap-1.5 text-[10px] shrink-0">
             <span className="px-1.5 py-0.5 bg-background shadow-minimal rounded-[4px] text-[11px] text-foreground/70">
-              {activity.toolInput.file_path.split('/').pop()}
+              {normalizePath(activity.toolInput.file_path).split('/').pop()}
             </span>
           </span>
         )}
@@ -1619,9 +1715,6 @@ export const TurnCard = React.memo(function TurnCard({
   // Track if user has toggled expansion (skip animation on initial mount)
   const hasUserToggled = useRef(false)
 
-  // Ref for scrollable activities container (to scroll to bottom on expand)
-  const activitiesContainerRef = useRef<HTMLDivElement>(null)
-
   // Track if component has mounted (enable fade-in for new activities after mount)
   const hasMounted = useRef(false)
   useEffect(() => {
@@ -1646,21 +1739,6 @@ export const TurnCard = React.memo(function TurnCard({
     }
   }, [turnId, isExpanded, onExpandedChange])
 
-  // Scroll to bottom of activities list when user manually expands
-  // This shows the most recent step instead of the oldest
-  useEffect(() => {
-    if (isExpanded && hasUserToggled.current && activitiesContainerRef.current) {
-      // Wait for expansion animation to complete (250ms) before scrolling
-      const timer = setTimeout(() => {
-        activitiesContainerRef.current?.scrollTo({
-          top: activitiesContainerRef.current.scrollHeight,
-          behavior: 'smooth'
-        })
-      }, 260)
-      return () => clearTimeout(timer)
-    }
-  }, [isExpanded])
-
   // Use local state for activity groups if no controlled state provided
   const [localExpandedActivityGroups, setLocalExpandedActivityGroups] = useState<Set<string>>(new Set())
   const expandedActivityGroups = externalExpandedActivityGroups ?? localExpandedActivityGroups
@@ -1682,9 +1760,20 @@ export const TurnCard = React.memo(function TurnCard({
 
   // Sort activities by timestamp for correct chronological order
   // This handles the live streaming case (turn-utils sorts on flush for completed turns)
-  const sortedActivities = useMemo(
+  const allSortedActivities = useMemo(
     () => [...activities].sort((a, b) => a.timestamp - b.timestamp),
     [activities]
+  )
+
+  // Separate plan activities from regular activities
+  // Plans are rendered as full ResponseCards, not in the collapsible activities section
+  const planActivities = useMemo(
+    () => allSortedActivities.filter(a => a.type === 'plan'),
+    [allSortedActivities]
+  )
+  const sortedActivities = useMemo(
+    () => allSortedActivities.filter(a => a.type !== 'plan'),
+    [allSortedActivities]
   )
 
   // Check if we have any Task subagents - if so, use grouped view
@@ -1717,6 +1806,7 @@ export const TurnCard = React.memo(function TurnCard({
   // - All tool activities are errors (nothing completed successfully)
   // - Any intermediate activities have no meaningful content (empty or just whitespace)
   // - No response text to show
+  // - No plan activities
   // The "Response interrupted" info banner alone is sufficient feedback.
   const hasNoMeaningfulWork = activities.length > 0
     && activities.every(a => {
@@ -1724,6 +1814,8 @@ export const TurnCard = React.memo(function TurnCard({
       if (a.type === 'tool') return a.status === 'error'
       // Intermediate activities must have no meaningful content
       if (a.type === 'intermediate') return !a.content?.trim()
+      // Plan activities are meaningful work
+      if (a.type === 'plan') return false
       // Other activity types - consider as no meaningful work
       return true
     })
@@ -1732,7 +1824,8 @@ export const TurnCard = React.memo(function TurnCard({
     return null
   }
 
-  const hasActivities = activities.length > 0
+  // Only count non-plan activities for the collapsible section
+  const hasActivities = sortedActivities.length > 0
 
   // Determine if thinking indicator should show using the phase-based state machine.
   // This properly handles the "gap" state (awaiting) between tool completion and next action,
@@ -1812,7 +1905,6 @@ export const TurnCard = React.memo(function TurnCard({
                 {/* Scrollable container when many activities - subtle background for scroll context */}
                 {/* ml-[15px] positions the border-l under the chevron */}
                 <div
-                  ref={activitiesContainerRef}
                   className={cn(
                     "pl-4 pr-2 py-0 space-y-0.5 border-l-2 border-muted ml-[13px]",
                     sortedActivities.length > SIZE_CONFIG.maxVisibleActivities && "rounded-r-md overflow-y-auto py-1.5"
@@ -1847,7 +1939,7 @@ export const TurnCard = React.memo(function TurnCard({
                               : false
                           }
                           animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: hasUserToggled.current && index < SIZE_CONFIG.staggeredAnimationLimit ? index * 0.03 : 0 }}
+                          transition={{ delay: hasUserToggled.current ? (index < SIZE_CONFIG.staggeredAnimationLimit ? index * 0.03 : SIZE_CONFIG.staggeredAnimationLimit * 0.03) : 0 }}
                         >
                           <ActivityRow
                             activity={item}
@@ -1870,7 +1962,7 @@ export const TurnCard = React.memo(function TurnCard({
                         }
                         animate={{ opacity: 1, x: 0 }}
                         // Only animate on user toggle, not initial mount
-                        transition={{ delay: hasUserToggled.current && index < SIZE_CONFIG.staggeredAnimationLimit ? index * 0.03 : 0 }}
+                        transition={{ delay: hasUserToggled.current ? (index < SIZE_CONFIG.staggeredAnimationLimit ? index * 0.03 : SIZE_CONFIG.staggeredAnimationLimit * 0.03) : 0 }}
                       >
                         <ActivityRow
                           activity={activity}
@@ -1918,6 +2010,24 @@ export const TurnCard = React.memo(function TurnCard({
           <span>{isBuffering ? 'Preparing response...' : 'Thinking...'}</span>
         </div>
       )}
+
+      {/* Plan Activities - rendered as full ResponseCards, time-sorted with other activities */}
+      {planActivities.map((planActivity, index) => (
+        <div key={planActivity.id} className={cn("select-text", (hasActivities || index > 0) && "mt-2")}>
+          <ResponseCard
+            text={planActivity.content || ''}
+            isStreaming={false}
+            onOpenFile={onOpenFile}
+            onOpenUrl={onOpenUrl}
+            onPopOut={onPopOut ? () => onPopOut(planActivity.content || '') : undefined}
+            variant="plan"
+            onAccept={onAcceptPlan}
+            onAcceptWithCompact={onAcceptPlanWithCompact}
+            isLastResponse={isLastResponse && index === planActivities.length - 1}
+            compactMode={compactMode}
+          />
+        </div>
+      ))}
 
       {/* Response Section - only shown when not buffering */}
       {/* Animated version for playground demos */}

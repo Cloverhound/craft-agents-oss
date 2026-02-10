@@ -24,6 +24,8 @@ import {
   handleTodoStateChanged,
   handleSessionFlagged,
   handleSessionUnflagged,
+  handleSessionArchived,
+  handleSessionUnarchived,
   handleNameChanged,
   handlePermissionRequest,
   handleCredentialRequest,
@@ -37,6 +39,7 @@ import {
   handleWorkingDirectoryChanged,
   handlePermissionModeChanged,
   handleSessionModelChanged,
+  handleConnectionChanged,
   handleUserMessage,
   handleSessionShared,
   handleSessionUnshared,
@@ -44,6 +47,7 @@ import {
   handleAuthCompleted,
   handleUsageUpdate,
   handleSessionResetToMessage,
+  handleTodosUpdated,
 } from './handlers/session'
 
 /**
@@ -132,6 +136,9 @@ export function processEvent(
     case 'session_model_changed':
       return handleSessionModelChanged(state, event)
 
+    case 'connection_changed':
+      return handleConnectionChanged(state, event)
+
     case 'sources_changed':
       return handleSourcesChanged(state, event)
 
@@ -146,6 +153,12 @@ export function processEvent(
 
     case 'session_unflagged':
       return handleSessionUnflagged(state, event)
+
+    case 'session_archived':
+      return handleSessionArchived(state, event)
+
+    case 'session_unarchived':
+      return handleSessionUnarchived(state, event)
 
     case 'name_changed':
       return handleNameChanged(state, event)
@@ -191,6 +204,9 @@ export function processEvent(
 
     case 'session_reset_to_message':
       return handleSessionResetToMessage(state, event)
+
+    case 'todos_updated':
+      return handleTodosUpdated(state, event)
 
     default: {
       // Unknown event type - return state unchanged but as new reference

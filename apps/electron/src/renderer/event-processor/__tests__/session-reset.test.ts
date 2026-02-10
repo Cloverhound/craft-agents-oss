@@ -231,13 +231,13 @@ describe('handleSessionResetToMessage', () => {
 
     it('preserves permission mode', () => {
       const state = createSessionState({
-        session: createSession({ permissionMode: 'execute' }),
+        session: createSession({ permissionMode: 'allow-all' }),
       })
 
       const event = createResetEvent()
       const result = handleSessionResetToMessage(state, event)
 
-      expect(result.state.session.permissionMode).toBe('execute')
+      expect(result.state.session.permissionMode).toBe('allow-all')
     })
 
     it('preserves labels and flags', () => {

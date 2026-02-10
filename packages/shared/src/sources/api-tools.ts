@@ -12,7 +12,7 @@ import { join } from 'path';
 import type { ApiConfig } from './types.ts';
 import { debug } from '../utils/debug.ts';
 import { estimateTokens, summarizeLargeResult, TOKEN_LIMIT, MAX_SUMMARIZATION_INPUT } from '../utils/summarize.ts';
-import type { ApiCredential, BasicAuthCredential, MultiHeaderCredential } from './credential-manager.ts';
+import type { ApiCredential, BasicAuthCredential } from './credential-manager.ts';
 import { isMultiHeaderCredential } from './credential-manager.ts';
 
 // Maximum file size for binary downloads (500MB)
@@ -20,8 +20,7 @@ import { isMultiHeaderCredential } from './credential-manager.ts';
 const MAX_DOWNLOAD_SIZE = 500 * 1024 * 1024;
 
 // Re-export for convenience
-export type { ApiCredential, BasicAuthCredential, MultiHeaderCredential } from './credential-manager.ts';
-export { isMultiHeaderCredential } from './credential-manager.ts';
+export type { ApiCredential, BasicAuthCredential } from './credential-manager.ts';
 
 /**
  * Build an Authorization header value for bearer-style authentication.
@@ -443,16 +442,11 @@ function isGmailAttachment(json: unknown): json is { size: number; data: string 
 /**
  * Build headers for an API request, injecting authentication and default headers
  */
-export function buildHeaders(
+function buildHeaders(
   auth: ApiConfig['auth'],
   credential: ApiCredential,
   defaultHeaders?: Record<string, string>
 ): Record<string, string> {
-  debug(`[api-tools] buildHeaders called: auth.type=${auth?.type}, credential type=${typeof credential}, isMultiHeader=${isMultiHeaderCredential(credential)}`);
-  if (typeof credential === 'object' && credential !== null) {
-    debug(`[api-tools] credential keys: ${Object.keys(credential).join(', ')}`);
-  }
-
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     // Merge default headers (e.g., beta feature flags)
@@ -475,17 +469,14 @@ export function buildHeaders(
 
   // Handle header auth (supports both single and multi-header)
   if (auth.type === 'header') {
-    debug(`[api-tools] header auth: isMultiHeaderCredential=${isMultiHeaderCredential(credential)}`);
     // Multi-header: credential is { headerName: value, ... }
     if (isMultiHeaderCredential(credential)) {
-      debug(`[api-tools] Applying multi-header credentials to request`);
       Object.assign(headers, credential);
     }
     // Single header: existing behavior
     else if (typeof credential === 'string' && credential) {
       headers[auth.headerName || 'x-api-key'] = credential;
     }
-    debug(`[api-tools] Final headers (keys only): ${Object.keys(headers).join(', ')}`);
     return headers;
   }
 
@@ -588,7 +579,8 @@ function buildToolDescription(config: ApiConfig): string {
 export function createApiTool(
   config: ApiConfig,
   credential: ApiCredentialSource,
-  sessionPath?: string
+  sessionPath?: string,
+  summarizationModel?: string
 ) {
   const toolName = `api_${config.name}`;
   debug(`[api-tools] Creating flexible tool: ${toolName}`);
@@ -796,6 +788,7 @@ export function createApiTool(
               path,
               input: params,
               modelIntent: _intent,
+              modelOverride: summarizationModel,
             });
 
             // Return file path + summary
@@ -849,11 +842,12 @@ export function createApiTool(
 export function createApiServer(
   config: ApiConfig,
   credential: ApiCredentialSource,
-  sessionPath?: string
+  sessionPath?: string,
+  summarizationModel?: string
 ): ReturnType<typeof createSdkMcpServer> {
   debug(`[api-tools] Creating server for ${config.name}${sessionPath ? ` (session: ${sessionPath})` : ''}`);
 
-  const apiTool = createApiTool(config, credential, sessionPath);
+  const apiTool = createApiTool(config, credential, sessionPath, summarizationModel);
 
   return createSdkMcpServer({
     name: `api_${config.name}`,

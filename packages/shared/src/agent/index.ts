@@ -1,11 +1,13 @@
-export * from './craft-agent.ts';
+// Export ClaudeAgent (renamed from CraftAgent) and backward-compatible aliases
+export * from './claude-agent.ts';
+
+// Export CodexAgent for direct use
+export { CodexAgent, CodexBackend } from './codex-agent.ts';
 export * from './errors.ts';
 export * from './options.ts';
 
 // Export session-scoped-tools - tools scoped to a specific session
 export {
-  // Tool factories (creates session-scoped tools)
-  createSubmitPlanTool,
   // Session-scoped tools provider
   getSessionScopedTools,
   cleanupSessionScopedTools,
@@ -103,5 +105,44 @@ export {
   type PermissionsContext,
 } from './permissions-config.ts';
 
-// Export LLM tool - secondary Claude calls for subtasks
-export { createLLMTool, type LLMToolOptions } from './llm-tool.ts';
+// Export BaseAgent - shared abstract class for all agent backends
+export {
+  BaseAgent,
+  // Mini agent configuration (centralized for all backends)
+  type MiniAgentConfig,
+  MINI_AGENT_TOOLS,
+  MINI_AGENT_MCP_KEYS,
+} from './base-agent.ts';
+
+// Export backend abstraction - unified interface for AI agents
+// This module enables switching between Claude (Anthropic) and Codex (OpenAI) agents
+export {
+  // Factory (createAgent is the preferred name, createBackend is kept for backward compat)
+  createBackend,
+  createAgent,
+  detectProvider,
+  getAvailableProviders,
+  // Agent implementations (both implement AgentBackend directly)
+  ClaudeAgent as BackendClaudeAgent, // Alias to avoid conflict with direct export
+  CodexAgent as BackendCodexAgent, // Avoid conflict with direct export above
+  // Types
+  type AgentBackend,
+  type AgentProvider,
+  type BackendConfig,
+  type PermissionCallback,
+  type PlanCallback,
+  type AuthCallback,
+  type SourceChangeCallback,
+  type SourceActivationCallback,
+  type ChatOptions,
+  type RecoveryMessage,
+  type SdkMcpServerConfig as BackendMcpServerConfig,
+  // Enums
+  AbortReason as BackendAbortReason,
+} from './backend/index.ts';
+
+// Export core utilities for shared agent logic
+export * from './core/index.ts';
+
+// Export PowerShell validator root setter (for Electron startup on Windows)
+export { setPowerShellValidatorRoot } from './powershell-validator.ts';

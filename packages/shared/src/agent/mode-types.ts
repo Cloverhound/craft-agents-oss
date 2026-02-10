@@ -60,6 +60,8 @@ const PatternSchema = z.union([
  * allows users to block additional tools beyond these defaults.
  */
 export const PermissionsConfigSchema = z.object({
+  /** Version date for migration (ISO format: "2026-02-07") */
+  version: z.string().optional(),
   /** Bash command patterns to allow (regex strings) */
   allowedBashPatterns: z.array(PatternSchema).optional(),
   /** MCP tool patterns to allow (regex strings) */

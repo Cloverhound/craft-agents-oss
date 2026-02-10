@@ -207,67 +207,41 @@ export const MENU_SECTIONS: MenuSection[] = [EDIT_MENU, VIEW_MENU, WINDOW_MENU]
  * Settings item definition
  * Used by both AppMenu (logo dropdown) and SettingsNavigator (sidebar panel)
  */
+import { SETTINGS_PAGES, type SettingsSubpage } from './settings-registry'
+
 export interface SettingsMenuItem {
-  id: 'app' | 'appearance' | 'input' | 'workspace' | 'permissions' | 'labels' | 'shortcuts' | 'preferences'
+  id: SettingsSubpage
   label: string
   icon: string        // Lucide icon name for AppMenu
   description: string // Shown in SettingsNavigator
 }
 
 /**
- * All settings pages - single source of truth
- * Order here determines display order in both menus
+ * Icon mapping for settings pages (Lucide icon names)
+ * Only icons need to be defined here - page data comes from settings-registry
  */
-export const SETTINGS_ITEMS: SettingsMenuItem[] = [
-  {
-    id: 'app',
-    label: 'App',
-    icon: 'ToggleRight',
-    description: 'Notifications, API connection, updates',
-  },
-  {
-    id: 'appearance',
-    label: 'Appearance',
-    icon: 'Palette',
-    description: 'Theme, font, tool icons',
-  },
-  {
-    id: 'input',
-    label: 'Input',
-    icon: 'Keyboard',
-    description: 'Typing behavior and message sending',
-  },
-  {
-    id: 'workspace',
-    label: 'Workspace',
-    icon: 'Building2',
-    description: 'Model, mode cycling, advanced',
-  },
-  {
-    id: 'permissions',
-    label: 'Permissions',
-    icon: 'ShieldCheck',
-    description: 'Allowed commands in Explore mode',
-  },
-  {
-    id: 'labels',
-    label: 'Labels',
-    icon: 'Tag',
-    description: 'Label hierarchy and auto-apply rules',
-  },
-  {
-    id: 'shortcuts',
-    label: 'Shortcuts',
-    icon: 'Keyboard',
-    description: 'Keyboard shortcuts reference',
-  },
-  {
-    id: 'preferences',
-    label: 'Preferences',
-    icon: 'UserCircle',
-    description: 'Your personal preferences',
-  },
-]
+const SETTINGS_ICONS: Record<SettingsSubpage, string> = {
+  app: 'ToggleRight',
+  ai: 'Sparkles',
+  appearance: 'Palette',
+  input: 'Keyboard',
+  workspace: 'Building2',
+  permissions: 'ShieldCheck',
+  labels: 'Tag',
+  shortcuts: 'Keyboard',
+  preferences: 'UserCircle',
+}
+
+/**
+ * All settings pages - derived from settings-registry (single source of truth)
+ * Order is determined by SETTINGS_PAGES in settings-registry.ts
+ */
+export const SETTINGS_ITEMS: SettingsMenuItem[] = SETTINGS_PAGES.map(page => ({
+  id: page.id,
+  label: page.label,
+  icon: SETTINGS_ICONS[page.id],
+  description: page.description,
+}))
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers

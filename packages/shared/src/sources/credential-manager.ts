@@ -24,8 +24,7 @@ import {
 } from './types.ts';
 import type { CredentialId, StoredCredential } from '../credentials/types.ts';
 import { getCredentialManager } from '../credentials/index.ts';
-import { CraftOAuth, type OAuthCallbacks, type OAuthTokens } from '../auth/oauth.ts';
-import { type OAuthSessionContext } from '../auth/types.ts';
+import { CraftOAuth, getMcpBaseUrl, type OAuthCallbacks, type OAuthTokens } from '../auth/oauth.ts';
 import {
   startGoogleOAuth,
   refreshGoogleToken,
@@ -353,10 +352,8 @@ export class SourceCredentialManager {
    */
   async authenticate(
     source: LoadedSource,
-    callbacks?: OAuthCallbacks,
-    sessionContext?: OAuthSessionContext
+    callbacks?: OAuthCallbacks
   ): Promise<AuthResult> {
-    console.log('[SourceCredentialManager] authenticate called with sessionContext:', sessionContext);
     const defaultCallbacks: OAuthCallbacks = {
       onStatus: (msg) => debug(`[SourceCredentialManager] ${msg}`),
       onError: (err) => debug(`[SourceCredentialManager] Error: ${err}`),
@@ -365,22 +362,22 @@ export class SourceCredentialManager {
 
     // Google APIs use Google OAuth
     if (source.config.provider === 'google') {
-      return this.authenticateGoogle(source, cb, sessionContext);
+      return this.authenticateGoogle(source, cb);
     }
 
     // Slack APIs use Slack OAuth
     if (source.config.provider === 'slack') {
-      return this.authenticateSlack(source, cb, sessionContext);
+      return this.authenticateSlack(source, cb);
     }
 
     // Microsoft APIs use Microsoft OAuth
     if (source.config.provider === 'microsoft') {
-      return this.authenticateMicrosoft(source, cb, sessionContext);
+      return this.authenticateMicrosoft(source, cb);
     }
 
     // MCP OAuth flow
     if (source.config.type === 'mcp' && source.config.mcp?.authType === 'oauth') {
-      return this.authenticateMcp(source, cb, sessionContext);
+      return this.authenticateMcp(source, cb);
     }
 
     return {
@@ -394,8 +391,7 @@ export class SourceCredentialManager {
    */
   private async authenticateMcp(
     source: LoadedSource,
-    callbacks: OAuthCallbacks,
-    sessionContext?: OAuthSessionContext
+    callbacks: OAuthCallbacks
   ): Promise<AuthResult> {
     if (!source.config.mcp?.url) {
       return { success: false, error: 'MCP URL not configured' };
@@ -404,8 +400,7 @@ export class SourceCredentialManager {
     try {
       const oauth = new CraftOAuth(
         { mcpUrl: source.config.mcp.url },
-        callbacks,
-        sessionContext
+        callbacks
       );
 
       const { tokens, clientId } = await oauth.authenticate();
@@ -440,8 +435,7 @@ export class SourceCredentialManager {
    */
   private async authenticateGoogle(
     source: LoadedSource,
-    callbacks: OAuthCallbacks,
-    sessionContext?: OAuthSessionContext
+    callbacks: OAuthCallbacks
   ): Promise<AuthResult> {
     try {
       // Determine service/scopes from config
@@ -476,7 +470,6 @@ export class SourceCredentialManager {
         // Pass user-provided OAuth credentials from source config (if available)
         clientId: api?.googleOAuthClientId,
         clientSecret: api?.googleOAuthClientSecret,
-        sessionContext,
       };
 
       const result: GoogleOAuthResult = await startGoogleOAuth(options);
@@ -516,8 +509,7 @@ export class SourceCredentialManager {
    */
   private async authenticateSlack(
     source: LoadedSource,
-    callbacks: OAuthCallbacks,
-    sessionContext?: OAuthSessionContext
+    callbacks: OAuthCallbacks
   ): Promise<AuthResult> {
     try {
       // Determine service/scopes from config
@@ -543,7 +535,6 @@ export class SourceCredentialManager {
         service,
         userScopes,
         appType: 'electron',
-        sessionContext,
       };
 
       const result: SlackOAuthResult = await startSlackOAuth(options);
@@ -582,8 +573,7 @@ export class SourceCredentialManager {
    */
   private async authenticateMicrosoft(
     source: LoadedSource,
-    callbacks: OAuthCallbacks,
-    sessionContext?: OAuthSessionContext
+    callbacks: OAuthCallbacks
   ): Promise<AuthResult> {
     try {
       // Determine service/scopes from config
@@ -615,7 +605,6 @@ export class SourceCredentialManager {
         service,
         scopes,
         appType: 'electron',
-        sessionContext,
       };
 
       const result: MicrosoftOAuthResult = await startMicrosoftOAuth(options);
@@ -850,6 +839,13 @@ export class SourceCredentialManager {
 /**
  * Check if a single source needs authentication.
  * Returns true if the source requires auth but isn't yet authenticated.
+ *
+ * This is the **inverse** of the auth portion of isSourceUsable().
+ * - isSourceUsable() → Is the source ready to use? (enabled AND auth OK)
+ * - sourceNeedsAuthentication() → Does the source need auth to become usable?
+ *
+ * Use this to prompt users for authentication, not for filtering sources.
+ * For filtering sources, use isSourceUsable() from storage.ts.
  *
  * This correctly handles:
  * - MCP sources with authType: "none" → never needs auth

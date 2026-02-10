@@ -15,6 +15,10 @@
  */
 
 import type { AgentEvent } from '@craft-agent/core/types';
+import { toolMetadataStore } from '../network-interceptor.ts';
+import { createLogger } from '../utils/debug.ts';
+
+const log = createLogger('tool-matching');
 
 // ============================================================================
 // Tool Index — append-only, order-independent lookup
@@ -159,8 +163,7 @@ export function extractToolStarts(
       const hasNewInput = Object.keys(toolBlock.input).length > 0;
       if (hasNewInput) {
         // Re-emit with complete input (assistant message has full input, stream has {})
-        const intent = extractIntent(toolBlock);
-        const displayName = toolBlock.input._displayName as string | undefined;
+        const { intent, displayName } = extractToolMetadata(toolBlock);
         events.push({
           type: 'tool_start',
           toolName: toolBlock.name,
@@ -177,8 +180,7 @@ export function extractToolStarts(
 
     emittedToolStartIds.add(toolBlock.id);
 
-    const intent = extractIntent(toolBlock);
-    const displayName = toolBlock.input._displayName as string | undefined;
+    const { intent, displayName } = extractToolMetadata(toolBlock);
 
     events.push({
       type: 'tool_start',
@@ -295,15 +297,42 @@ export function extractToolResults(
 // Helpers (pure)
 // ============================================================================
 
-/** Extract intent from a tool_use block's input */
-function extractIntent(toolBlock: ToolUseBlock): string | undefined {
-  const input = toolBlock.input;
-  let intent = input._intent as string | undefined;
-  // For Bash tools, use description field as intent
-  if (!intent && toolBlock.name === 'Bash') {
-    intent = (input as { description?: string }).description;
+/**
+ * Extract intent and displayName metadata for a tool call.
+ *
+ * Sources (checked in priority order):
+ * 1. toolMetadataStore — populated by the SSE stripping stream in network-interceptor.ts
+ * 2. toolBlock.input._intent / _displayName — fallback for Codex backend or if SSE interception didn't run
+ * 3. Bash description field — fallback for intent on Bash tools
+ */
+function extractToolMetadata(toolBlock: ToolUseBlock): { intent?: string; displayName?: string } {
+  // 1. Check the metadata store first (populated by SSE interceptor)
+  const stored = toolMetadataStore.get(toolBlock.id);
+  if (stored) {
+    let intent = stored.intent;
+    const displayName = stored.displayName;
+
+    // Bash description fallback for intent
+    if (!intent && toolBlock.name === 'Bash') {
+      intent = (toolBlock.input as { description?: string }).description;
+    }
+
+    return { intent, displayName };
   }
-  return intent;
+
+  // Log when metadata store misses — helps diagnose cross-process sync issues
+  log.debug(`extractToolMetadata: store miss for ${toolBlock.name} (${toolBlock.id})`);
+
+  // 2. Fallback: read directly from tool input (Codex backend, non-streaming, etc.)
+  let intent = toolBlock.input._intent as string | undefined;
+  const displayName = toolBlock.input._displayName as string | undefined;
+
+  // 3. Bash description fallback for intent
+  if (!intent && toolBlock.name === 'Bash') {
+    intent = (toolBlock.input as { description?: string }).description;
+  }
+
+  return { intent, displayName };
 }
 
 /** Serialize a tool result value to string, handling circular references */

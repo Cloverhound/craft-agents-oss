@@ -240,6 +240,7 @@ export function App() {
           numLines={overlayData.numLines}
           theme={theme}
           error={overlayData.error}
+          command={overlayData.command}
         />
       )}
 

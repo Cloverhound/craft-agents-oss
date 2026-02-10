@@ -138,7 +138,6 @@ export function useNotifications({
   // Subscribe to notification navigation (when user clicks a notification)
   useEffect(() => {
     const cleanup = window.electronAPI.onNotificationNavigate((data) => {
-      console.log('[Notifications] Navigate to session:', data.sessionId)
       onNavigateToSessionRef.current?.(data.sessionId)
     })
 
@@ -149,11 +148,9 @@ export function useNotifications({
   // This uses Canvas API (only available in renderer) to draw badge on icon
   useEffect(() => {
     const cleanup = window.electronAPI.onBadgeDraw(async (data) => {
-      console.log('[Notifications] Badge draw request:', data.count)
       try {
         const badgedIconDataUrl = await drawBadgeOnIcon(data.iconDataUrl, data.count)
         await window.electronAPI.setDockIconWithBadge(badgedIconDataUrl)
-        console.log('[Notifications] Badge icon set successfully')
       } catch (error) {
         console.error('[Notifications] Failed to draw badge:', error)
       }
@@ -166,7 +163,6 @@ export function useNotifications({
   const updateBadgeCount = useCallback(() => {
     // Only show badge if notifications are enabled
     if (!enabled) {
-      console.log('[Notifications] Badge disabled, clearing')
       window.electronAPI.updateBadgeCount(0)
       return
     }
@@ -184,14 +180,6 @@ export function useNotifications({
     if (hasProcessing && totalUnread === lastBadgeCountRef.current) {
       return
     }
-
-    // Debug: log sessions with messages vs unread
-    const sessionsWithMessages = metas.filter(m => m.lastFinalMessageId !== undefined)
-    console.log('[Notifications] Badge update:', {
-      totalSessions: metas.length,
-      sessionsWithMessages: sessionsWithMessages.length,
-      unreadCount: totalUnread,
-    })
 
     // Badge always shows unread count (regardless of focus)
     lastBadgeCountRef.current = totalUnread

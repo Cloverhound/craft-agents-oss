@@ -13,6 +13,7 @@
 
 import type { LoadedSource, ApiConfig } from './types.ts';
 import type { ApiCredential } from './credential-manager.ts';
+import { isSourceUsable } from './storage.ts';
 import { createApiServer } from './api-tools.ts';
 import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { debug } from '../utils/debug.ts';
@@ -115,11 +116,12 @@ export class SourceServerBuilder {
     };
 
     // Handle authentication for HTTP/SSE
+    // Note: Direct isAuthenticated check is safe here because we're inside authType !== 'none' block
     if (mcp.authType !== 'none') {
       if (token) {
         (config as { headers?: Record<string, string> }).headers = { Authorization: `Bearer ${token}` };
       } else if (source.config.isAuthenticated) {
-        // Expected token but not provided - needs re-auth
+        // Source claims to be authenticated but token is missing - needs re-auth
         debug(`[SourceServerBuilder] Source ${source.config.slug} needs re-authentication`);
         return null;
       }
@@ -140,7 +142,8 @@ export class SourceServerBuilder {
     source: LoadedSource,
     credential: ApiCredential | null,
     getToken?: () => Promise<string>,
-    sessionPath?: string
+    sessionPath?: string,
+    summarizationModel?: string
   ): Promise<ReturnType<typeof createSdkMcpServer> | null> {
     if (source.config.type !== 'api') return null;
     if (!source.config.api) {
@@ -153,6 +156,7 @@ export class SourceServerBuilder {
     const provider = source.config.provider;
 
     // Google APIs - use token getter with auto-refresh
+    // Note: Direct isAuthenticated check is safe - Google OAuth always requires auth
     if (provider === 'google') {
       if (!source.config.isAuthenticated || !getToken) {
         debug(`[SourceServerBuilder] Google API source ${source.config.slug} not authenticated`);
@@ -162,10 +166,11 @@ export class SourceServerBuilder {
       const config = this.buildApiConfig(source);
       // Pass the token getter function - it will be called before each request
       // to get a fresh token (with auto-refresh if expired)
-      return createApiServer(config, getToken, sessionPath);
+      return createApiServer(config, getToken, sessionPath, summarizationModel);
     }
 
     // Slack APIs - use token getter with auto-refresh
+    // Note: Direct isAuthenticated check is safe - Slack OAuth always requires auth
     if (provider === 'slack') {
       if (!source.config.isAuthenticated || !getToken) {
         debug(`[SourceServerBuilder] Slack API source ${source.config.slug} not authenticated`);
@@ -175,14 +180,14 @@ export class SourceServerBuilder {
       const config = this.buildApiConfig(source);
       // Pass the token getter function - it will be called before each request
       // to get a fresh token (with auto-refresh if expired)
-      return createApiServer(config, getToken, sessionPath);
+      return createApiServer(config, getToken, sessionPath, summarizationModel);
     }
 
     // Public APIs (no auth) can be used immediately
     if (authType === 'none') {
       debug(`[SourceServerBuilder] Building public API server for ${source.config.slug}`);
       const config = this.buildApiConfig(source);
-      return createApiServer(config, '', sessionPath);
+      return createApiServer(config, '', sessionPath, summarizationModel);
     }
 
     // API key/bearer/header/query/basic auth - use static credential
@@ -191,12 +196,9 @@ export class SourceServerBuilder {
       return null;
     }
 
-    debug(`[SourceServerBuilder] Building API server for ${source.config.slug} (auth: ${authType}), credential type=${typeof credential}, isObject=${typeof credential === 'object'}`);
-    if (typeof credential === 'object' && credential !== null) {
-      debug(`[SourceServerBuilder] Credential keys: ${Object.keys(credential).join(', ')}`);
-    }
+    debug(`[SourceServerBuilder] Building API server for ${source.config.slug} (auth: ${authType})`);
     const config = this.buildApiConfig(source);
-    return createApiServer(config, credential, sessionPath);
+    return createApiServer(config, credential, sessionPath, summarizationModel);
   }
 
   /**
@@ -244,14 +246,15 @@ export class SourceServerBuilder {
   async buildAll(
     sourcesWithCredentials: SourceWithCredential[],
     getTokenForSource?: (source: LoadedSource) => (() => Promise<string>) | undefined,
-    sessionPath?: string
+    sessionPath?: string,
+    summarizationModel?: string
   ): Promise<BuiltServers> {
     const mcpServers: Record<string, McpServerConfig> = {};
     const apiServers: Record<string, ReturnType<typeof createSdkMcpServer>> = {};
     const errors: BuiltServers['errors'] = [];
 
     for (const { source, token, credential } of sourcesWithCredentials) {
-      if (!source.config.enabled) continue;
+      if (!isSourceUsable(source)) continue;
 
       try {
         if (source.config.type === 'mcp') {
@@ -270,7 +273,7 @@ export class SourceServerBuilder {
           }
         } else if (source.config.type === 'api') {
           const getToken = getTokenForSource?.(source);
-          const server = await this.buildApiServer(source, credential ?? null, getToken, sessionPath);
+          const server = await this.buildApiServer(source, credential ?? null, getToken, sessionPath, summarizationModel);
           if (server) {
             apiServers[source.config.slug] = server;
           }

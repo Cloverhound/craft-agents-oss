@@ -88,7 +88,6 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
       // Check if this version was dismissed
       const dismissedVersion = await window.electronAPI.getDismissedUpdateVersion()
       if (dismissedVersion === info.latestVersion) {
-        console.log('[useUpdateChecker] Update dismissed, skipping toast')
         return
       }
 
@@ -134,12 +133,6 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
         // If already ready, show toast (clear any previous dismissal since user explicitly checked)
         shownToastVersionRef.current = null // Reset so toast can show again
         showUpdateToast(info.latestVersion, installUpdate)
-      } else if (info.downloadState === 'downloading' && info.latestVersion) {
-        // Update is available and downloading
-        toast.info(`Downloading v${info.latestVersion}`, {
-          description: 'The update will be ready to install shortly.',
-          duration: 4000,
-        })
       }
     } catch (error) {
       console.error('[useUpdateChecker] Check failed:', error)

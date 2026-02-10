@@ -929,7 +929,7 @@ export function EditPopover({
     const modelParam = model ? `&model=${encodeURIComponent(model)}` : ''
     const systemPromptParam = systemPromptPreset ? `&systemPrompt=${encodeURIComponent(systemPromptPreset)}` : ''
     // Navigate in same window by omitting window=focused parameter
-    const url = `craftagents://action/new-chat?input=${encodedInput}&send=true&mode=${permissionMode}&badges=${encodedBadges}${workdirParam}${modelParam}${systemPromptParam}`
+    const url = `craftagents://action/new-session?input=${encodedInput}&send=true&mode=${permissionMode}&badges=${encodedBadges}${workdirParam}${modelParam}${systemPromptParam}`
 
     window.electronAPI.openUrl(url)
     setOpen(false)
@@ -957,6 +957,7 @@ export function EditPopover({
         <PopoverContent
             side={side}
             align={align}
+            sticky="always"
             className="p-0"
             style={{
               width: containerSize.width,
@@ -968,7 +969,7 @@ export function EditPopover({
             onInteractOutside={handleInteractOutside}
             onEscapeKeyDown={handleEscapeKeyDown}
           >
-            {/* Container - size inherited from PopoverContent for Radix collision detection */}
+            {/* Container */}
             <div
               ref={popoverRef}
               className="relative bg-foreground-2 overflow-hidden w-full h-full"
@@ -1003,13 +1004,14 @@ export function EditPopover({
                   emptyStateLabel={context.label}
                 />
               </div>
-
-              {/* Bottom-right resize handle - invisible hit area */}
-              <div
-                onMouseDown={handleResizeStart}
-                className="absolute -bottom-2 -right-2 w-6 h-6 cursor-nwse-resize pointer-events-auto z-50"
-              />
             </div>
+
+            {/* Bottom-right resize handle - outside overflow-hidden container */}
+            <div
+              onMouseDown={handleResizeStart}
+              className="absolute -bottom-2 -right-2 w-6 h-6 cursor-nwse-resize pointer-events-auto z-50"
+              style={{ transform: `translate(${dragOffset.x}px, ${dragOffset.y}px)` }}
+            />
           </PopoverContent>
       </Popover>
     </>

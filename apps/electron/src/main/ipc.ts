@@ -9,9 +9,10 @@ import { SessionManager } from './sessions'
 import { ipcLog, windowLog, searchLog } from './logger'
 import { WindowManager } from './window-manager'
 import { registerOnboardingHandlers } from './onboarding'
-import { IPC_CHANNELS, type FileAttachment, type StoredAttachment, type AuthType, type ApiSetupInfo, type SendMessageOptions } from '../shared/types'
+import { IPC_CHANNELS, type FileAttachment, type StoredAttachment, type SendMessageOptions, type LlmConnectionSetup } from '../shared/types'
 import { readFileAttachment, perf, validateImageForClaudeAPI, IMAGE_LIMITS } from '@craft-agent/shared/utils'
-import { getAuthType, setAuthType, getPreferencesPath, getCustomModel, setCustomModel, getModel, setModel, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, getAnthropicBaseUrl, setAnthropicBaseUrl, loadStoredConfig, saveConfig, resolveModelId, type Workspace, SUMMARIZATION_MODEL } from '@craft-agent/shared/config'
+import { safeJsonParse } from '@craft-agent/shared/utils/files'
+import { getPreferencesPath, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, loadStoredConfig, saveConfig, type Workspace, getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, isOpenAIProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus } from '@craft-agent/shared/config'
 import { getSessionAttachmentsPath, validateSessionId } from '@craft-agent/shared/sessions'
 import { loadWorkspaceSources, getSourcesBySlugs, type LoadedSource } from '@craft-agent/shared/sources'
 import { isValidThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
@@ -50,6 +51,70 @@ function getWorkspaceOrThrow(workspaceId: string): Workspace {
     throw new Error(`Workspace not found: ${workspaceId}`)
   }
   return workspace
+}
+
+/**
+ * Built-in connection templates for the onboarding flow.
+ * Each template defines the default configuration for a known connection slug.
+ */
+const BUILT_IN_CONNECTION_TEMPLATES: Record<string, {
+  name: string | ((hasCustomEndpoint: boolean) => string)
+  providerType: LlmConnection['providerType'] | ((hasCustomEndpoint: boolean) => LlmConnection['providerType'])
+  authType: LlmConnection['authType'] | ((hasCustomEndpoint: boolean) => LlmConnection['authType'])
+}> = {
+  'anthropic-api': {
+    name: (h) => h ? 'Custom Anthropic-Compatible' : 'Anthropic (API Key)',
+    providerType: (h) => h ? 'anthropic_compat' : 'anthropic',
+    authType: (h) => h ? 'api_key_with_endpoint' : 'api_key',
+  },
+  'claude-max': {
+    name: 'Claude Max',
+    providerType: 'anthropic',
+    authType: 'oauth',
+  },
+  'codex': {
+    name: 'Codex (ChatGPT Plus)',
+    providerType: 'openai',
+    authType: 'oauth',
+  },
+  'codex-api': {
+    name: (h) => h ? 'Codex (Custom Endpoint)' : 'Codex (OpenAI API Key)',
+    providerType: 'openai_compat', // Always use compat for API key (5.3 is OAuth-only)
+    authType: (h) => h ? 'api_key_with_endpoint' : 'api_key',
+  },
+}
+
+/**
+ * Create an LLM connection configuration from a connection slug.
+ * Uses built-in templates for known slugs, throws for unknown slugs
+ * (custom connections are created through the settings UI).
+ */
+function createBuiltInConnection(slug: string, baseUrl?: string | null): LlmConnection {
+  const template = BUILT_IN_CONNECTION_TEMPLATES[slug]
+  if (!template) {
+    throw new Error(`Unknown built-in connection slug: ${slug}. Custom connections should be created through settings.`)
+  }
+
+  const hasCustomEndpoint = !!baseUrl
+  const providerType = typeof template.providerType === 'function'
+    ? template.providerType(hasCustomEndpoint)
+    : template.providerType
+  const authType = typeof template.authType === 'function'
+    ? template.authType(hasCustomEndpoint)
+    : template.authType
+  const name = typeof template.name === 'function'
+    ? template.name(hasCustomEndpoint)
+    : template.name
+
+  return {
+    slug,
+    name,
+    providerType,
+    authType,
+    models: getDefaultModelsForConnection(providerType),
+    defaultModel: getDefaultModelForConnection(providerType),
+    createdAt: Date.now(),
+  }
 }
 
 /**
@@ -181,7 +246,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   // Open a session in a new window
   ipcMain.handle(IPC_CHANNELS.OPEN_SESSION_IN_NEW_WINDOW, async (_event, workspaceId: string, sessionId: string) => {
     // Build deep link for session navigation
-    const deepLink = `craftagents://allChats/chat/${sessionId}`
+    const deepLink = `craftagents://allSessions/session/${sessionId}`
     windowManager.createWindow({
       workspaceId,
       focused: true,
@@ -251,6 +316,14 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   ipcMain.handle(IPC_CHANNELS.CREATE_SESSION, async (_event, workspaceId: string, options?: import('../shared/types').CreateSessionOptions) => {
     const end = perf.start('ipc.createSession', { workspaceId })
     const session = sessionManager.createSession(workspaceId, options)
+    end()
+    return session
+  })
+
+  // Create a sub-session under a parent session
+  ipcMain.handle(IPC_CHANNELS.CREATE_SUB_SESSION, async (_event, workspaceId: string, parentSessionId: string, options?: import('../shared/types').CreateSessionOptions) => {
+    const end = perf.start('ipc.createSubSession', { workspaceId, parentSessionId })
+    const session = await sessionManager.createSubSession(workspaceId, parentSessionId, options)
     end()
     return session
   })
@@ -341,6 +414,10 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         return sessionManager.flagSession(sessionId)
       case 'unflag':
         return sessionManager.unflagSession(sessionId)
+      case 'archive':
+        return sessionManager.archiveSession(sessionId)
+      case 'unarchive':
+        return sessionManager.unarchiveSession(sessionId)
       case 'rename':
         return sessionManager.renameSession(sessionId, command.name)
       case 'setTodoState':
@@ -389,6 +466,10 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       case 'refreshTitle':
         ipcLog.info(`IPC: refreshTitle received for session ${sessionId}`)
         return sessionManager.refreshTitle(sessionId)
+      // Connection selection (locked after first message)
+      case 'setConnection':
+        ipcLog.info(`IPC: setConnection received for session ${sessionId}, connection: ${command.connectionSlug}`)
+        return sessionManager.setSessionConnection(sessionId, command.connectionSlug)
       // Pending plan execution (Accept & Compact flow)
       case 'setPendingPlanExecution':
         return sessionManager.setPendingPlanExecution(sessionId, command.planPath)
@@ -396,8 +477,16 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         return sessionManager.markCompactionComplete(sessionId)
       case 'clearPendingPlanExecution':
         return sessionManager.clearPendingPlanExecution(sessionId)
-      case 'resetToMessage':
+      case "resetToMessage":
         return sessionManager.resetToMessage(sessionId, command.messageId, command.editedContent)
+      case "getSessionFamily":
+        return sessionManager.getSessionFamily(sessionId)
+      case "updateSiblingOrder":
+        return sessionManager.updateSiblingOrder(command.orderedSessionIds)
+      case "archiveCascade":
+        return sessionManager.archiveSessionCascade(sessionId)
+      case "deleteCascade":
+        return sessionManager.deleteSessionCascade(sessionId)
       default: {
         const _exhaustive: never = command
         throw new Error(`Unknown session command: ${JSON.stringify(command)}`)
@@ -609,8 +698,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
           // Validate image for Claude API
           const validation = validateImageForClaudeAPI(decoded.length, imageSize.width, imageSize.height)
 
-          // For dimension errors, calculate resize instead of rejecting
-          // File size errors (>5MB) still reject since we can't fix those without significant quality loss
+          // Determine if we should resize
           let shouldResize = validation.needsResize
           let targetSize = validation.suggestedSize
 
@@ -1186,117 +1274,127 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     }
   })
 
-  // ============================================================
-  // Settings - API Setup
-  // ============================================================
-
-  // Get current API setup and credential status
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_API_SETUP, async (): Promise<ApiSetupInfo> => {
-    const authType = getAuthType()
+  // Credential health check - validates credential store is readable and usable
+  // Called on app startup to detect corruption, machine migration, or missing credentials
+  ipcMain.handle(IPC_CHANNELS.CREDENTIAL_HEALTH_CHECK, async () => {
     const manager = getCredentialManager()
-
-    let hasCredential = false
-    let apiKey: string | undefined
-    let anthropicBaseUrl: string | undefined
-    let customModel: string | undefined
-
-    if (authType === 'api_key') {
-      apiKey = await manager.getApiKey() ?? undefined
-      anthropicBaseUrl = getAnthropicBaseUrl() ?? undefined
-      customModel = getCustomModel() ?? undefined
-      // Keyless providers (Ollama) are valid when a custom base URL is configured
-      hasCredential = !!apiKey || !!anthropicBaseUrl
-    } else if (authType === 'oauth_token') {
-      hasCredential = !!(await manager.getClaudeOAuth())
-    }
-
-    return {
-      authType,
-      hasCredential,
-      apiKey,
-      anthropicBaseUrl,
-      customModel,
-    }
+    return manager.checkHealth()
   })
 
-  // Update API setup and credential
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE_API_SETUP, async (_event, authType: AuthType, credential?: string, anthropicBaseUrl?: string | null, customModel?: string | null) => {
-    const manager = getCredentialManager()
-
-    // Clear old credentials when switching auth types
-    const oldAuthType = getAuthType()
-    if (oldAuthType !== authType) {
-      if (oldAuthType === 'api_key') {
-        await manager.delete({ type: 'anthropic_api_key' })
-      } else if (oldAuthType === 'oauth_token') {
-        await manager.delete({ type: 'claude_oauth' })
-      }
-    }
-
-    // Set new auth type
-    setAuthType(authType)
-
-    // Update Anthropic base URL (null to clear, undefined to keep unchanged)
-    if (anthropicBaseUrl !== undefined) {
-      try {
-        setAnthropicBaseUrl(anthropicBaseUrl)
-        if (anthropicBaseUrl) {
-          ipcLog.info('Anthropic base URL updated (HTTPS enforced)')
-        } else {
-          ipcLog.info('Anthropic base URL cleared')
-        }
-      } catch (error) {
-        ipcLog.error('Failed to set Anthropic base URL:', error)
-        throw error
-      }
-    }
-
-    // Update custom model (null to clear, undefined to keep unchanged)
-    if (customModel !== undefined) {
-      setCustomModel(customModel)
-      if (customModel) {
-        ipcLog.info('Custom model set:', customModel)
-      } else {
-        ipcLog.info('Custom model cleared')
-      }
-    }
-
-    // Store or clear credential
-    if (credential) {
-      if (authType === 'api_key') {
-        await manager.setApiKey(credential)
-      } else if (authType === 'oauth_token') {
-        // Save the access token (refresh token and expiry are managed by the OAuth flow)
-        await manager.setClaudeOAuth(credential)
-        ipcLog.info('Saved Claude OAuth access token')
-      }
-    } else if (credential === '') {
-      // Empty string means user explicitly cleared the credential
-      if (authType === 'api_key') {
-        await manager.delete({ type: 'anthropic_api_key' })
-        ipcLog.info('API key cleared')
-      } else if (authType === 'oauth_token') {
-        await manager.delete({ type: 'claude_oauth' })
-        ipcLog.info('Claude OAuth cleared')
-      }
-    }
-
-    ipcLog.info(`API setup updated to: ${authType}`)
-
-    // Reinitialize SessionManager auth to pick up new credentials
+  // Unified handler for LLM connection setup
+  ipcMain.handle(IPC_CHANNELS.SETUP_LLM_CONNECTION, async (_event, setup: LlmConnectionSetup): Promise<{ success: boolean; error?: string }> => {
     try {
-      await sessionManager.reinitializeAuth()
-      ipcLog.info('Reinitialized auth after billing update')
-    } catch (authError) {
-      ipcLog.error('Failed to reinitialize auth:', authError)
-      // Don't fail the whole operation if auth reinit fails
+      const manager = getCredentialManager()
+
+      // Ensure connection exists in config
+      let connection = getLlmConnection(setup.slug)
+      let isNewConnection = false
+      if (!connection) {
+        // Create connection with appropriate defaults based on slug
+        connection = createBuiltInConnection(setup.slug, setup.baseUrl)
+        isNewConnection = true
+      }
+
+      const updates: Partial<LlmConnection> = {}
+      if (setup.baseUrl !== undefined) {
+        const hasCustomEndpoint = !!setup.baseUrl
+        updates.baseUrl = setup.baseUrl ?? undefined
+
+        // Only mutate providerType for API key connections (not OAuth connections)
+        if (isAnthropicProvider(connection.providerType) && connection.authType !== 'oauth') {
+          const pt = hasCustomEndpoint ? 'anthropic_compat' as const : 'anthropic' as const
+          updates.providerType = pt
+          updates.authType = hasCustomEndpoint ? 'api_key_with_endpoint' : 'api_key'
+          if (!hasCustomEndpoint) {
+            updates.models = getDefaultModelsForConnection(pt)
+            updates.defaultModel = getDefaultModelForConnection(pt)
+          }
+        }
+
+        if (isOpenAIProvider(connection.providerType) && connection.authType !== 'oauth') {
+          const pt = hasCustomEndpoint ? 'openai_compat' as const : 'openai' as const
+          updates.providerType = pt
+          updates.authType = hasCustomEndpoint ? 'api_key_with_endpoint' : 'api_key'
+          if (!hasCustomEndpoint) {
+            updates.models = getDefaultModelsForConnection(pt)
+            updates.defaultModel = getDefaultModelForConnection(pt)
+          }
+        }
+      }
+
+      if (setup.defaultModel !== undefined) {
+        updates.defaultModel = setup.defaultModel ?? undefined
+      }
+      if (setup.models !== undefined) {
+        updates.models = setup.models ?? undefined
+      }
+
+      const pendingConnection: LlmConnection = {
+        ...connection,
+        ...updates,
+      }
+
+      if (updates.models && updates.models.length > 0) {
+        if (pendingConnection.defaultModel && !updates.models.includes(pendingConnection.defaultModel)) {
+          return { success: false, error: `Default model "${pendingConnection.defaultModel}" is not in the provided model list.` }
+        }
+        if (!pendingConnection.defaultModel) {
+          const firstModel = updates.models[0]
+          const firstModelId = typeof firstModel === 'string' ? firstModel : firstModel.id
+          pendingConnection.defaultModel = firstModelId
+          updates.defaultModel = firstModelId
+        }
+      }
+
+      if (isCompatProvider(pendingConnection.providerType) && !pendingConnection.defaultModel) {
+        return { success: false, error: 'Default model is required for compatible endpoints.' }
+      }
+
+      if (isNewConnection) {
+        addLlmConnection(pendingConnection)
+        ipcLog.info(`Created LLM connection: ${setup.slug}`)
+      } else if (Object.keys(updates).length > 0) {
+        updateLlmConnection(setup.slug, updates)
+        ipcLog.info(`Updated LLM connection settings: ${setup.slug}`)
+      }
+
+      // Store credential if provided
+      if (setup.credential) {
+        const authType = pendingConnection.authType
+        if (authType === 'oauth') {
+          await manager.setLlmOAuth(setup.slug, { accessToken: setup.credential })
+          ipcLog.info('Saved OAuth access token to LLM connection')
+        } else {
+          await manager.setLlmApiKey(setup.slug, setup.credential)
+          ipcLog.info('Saved API key to LLM connection')
+        }
+      }
+
+      // Set as default only if no default exists yet (first connection)
+      if (!getDefaultLlmConnection()) {
+        setDefaultLlmConnection(setup.slug)
+        ipcLog.info(`Set default LLM connection: ${setup.slug}`)
+      }
+
+      // Reinitialize auth with the newly-created connection's slug
+      // (not the default, which may be a different connection)
+      const authSlug = getDefaultLlmConnection() || setup.slug
+      await sessionManager.reinitializeAuth(authSlug)
+      ipcLog.info('Reinitialized auth after LLM connection setup')
+
+      return { success: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      ipcLog.error('Failed to setup LLM connection:', message)
+      return { success: false, error: message }
     }
   })
 
   // Test API connection (validates API key, base URL, and optionally custom model)
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_TEST_API_CONNECTION, async (_event, apiKey: string, baseUrl?: string, modelName?: string): Promise<{ success: boolean; error?: string; modelCount?: number }> => {
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_TEST_API_CONNECTION, async (_event, apiKey: string, baseUrl?: string, models?: string[]): Promise<{ success: boolean; error?: string; modelCount?: number }> => {
     const trimmedKey = apiKey?.trim()
     const trimmedUrl = baseUrl?.trim()
+    const normalizedModels = (models ?? []).map(m => m.trim()).filter(Boolean)
 
     // Require API key unless a custom base URL is provided (e.g. Ollama needs no key)
     if (!trimmedKey && !trimmedUrl) {
@@ -1323,15 +1421,34 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       })
 
       // Determine test model: user-specified model takes priority, otherwise use
-      // the default Haiku model for known providers (validates full pipeline).
+      // the default Sonnet model for known providers (validates full pipeline).
       // Custom endpoints MUST specify a model — there's no sensible default.
-      const userModel = modelName?.trim()
+      if (normalizedModels.length > 0) {
+        for (const modelId of normalizedModels) {
+          try {
+            await client.messages.create({
+              model: modelId,
+              max_tokens: 16,
+              messages: [{ role: 'user', content: 'hi' }],
+              tools: [{
+                name: 'test_tool',
+                description: 'Test tool for validation',
+                input_schema: { type: 'object' as const, properties: {} }
+              }]
+            })
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error)
+            return { success: false, error: `Model "${modelId}" failed validation: ${msg.slice(0, 300)}` }
+          }
+        }
+        return { success: true }
+      }
+
+      // No models specified — use default model for known providers
       let testModel: string
-      if (userModel) {
-        testModel = userModel
-      } else if (!trimmedUrl || trimmedUrl.includes('openrouter.ai') || trimmedUrl.includes('ai-gateway.vercel.sh')) {
+      if (!trimmedUrl || trimmedUrl.includes('openrouter.ai') || trimmedUrl.includes('ai-gateway.vercel.sh')) {
         // Anthropic, OpenRouter, and Vercel are all Anthropic-compatible — same model IDs
-        testModel = resolveModelId(SUMMARIZATION_MODEL)
+        testModel = getDefaultModelForConnection('anthropic')
       } else {
         // Custom endpoint with no model specified — can't test without knowing the model
         return { success: false, error: 'Please specify a model for custom endpoints' }
@@ -1389,7 +1506,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         lowerMsg.includes('tool use is not supported') ||
         (lowerMsg.includes('tool') && lowerMsg.includes('not') && lowerMsg.includes('support'))
       if (isToolSupportError) {
-        const displayModel = modelName?.trim() || resolveModelId(SUMMARIZATION_MODEL)
+        const displayModel = normalizedModels[0] || getDefaultModelForConnection('anthropic')
         return { success: false, error: `Model "${displayModel}" does not support tool/function calling. Craft Agent requires a model with tool support (e.g. Claude, GPT-4, Gemini).` }
       }
 
@@ -1401,8 +1518,8 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         lowerMsg.includes('invalid model') ||
         (lowerMsg.includes('404') && lowerMsg.includes('model'))
       if (isModelNotFound) {
-        if (modelName?.trim()) {
-          return { success: false, error: `Model "${modelName}" not found. Check the model name and try again.` }
+        if (normalizedModels[0]) {
+          return { success: false, error: `Model "${normalizedModels[0]}" not found. Check the model name and try again.` }
         }
         // Default model (Haiku) not found on a known provider — likely a billing/permissions issue
         return { success: false, error: 'Could not access the default model. Check your API key permissions and billing.' }
@@ -1413,19 +1530,90 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     }
   })
 
-  // ============================================================
-  // Settings - Model (Global Default)
-  // ============================================================
+  // Test OpenAI API connection (validates OpenAI API key against /v1/models endpoint)
+  // Used for Codex backend which requires OpenAI-compatible API keys
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_TEST_OPENAI_CONNECTION, async (_event, apiKey: string, baseUrl?: string, models?: string[]): Promise<{ success: boolean; error?: string }> => {
+    const trimmedKey = apiKey?.trim()
+    const trimmedUrl = baseUrl?.trim()
+    const normalizedModels = (models ?? []).map(m => m.trim()).filter(Boolean)
 
-  // Get global default model
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_MODEL, async (): Promise<string | null> => {
-    return getModel()
-  })
+    // Require API key for OpenAI validation
+    if (!trimmedKey) {
+      return { success: false, error: 'API key is required' }
+    }
 
-  // Set global default model
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_MODEL, async (_event, model: string) => {
-    setModel(model)
-    ipcLog.info(`Global model updated to: ${model}`)
+    try {
+      // Test against /v1/models endpoint - validates auth without consuming tokens
+      // For OpenAI direct: https://api.openai.com/v1/models
+      // For OpenRouter/Vercel: use their respective base URLs
+      const effectiveBaseUrl = trimmedUrl || 'https://api.openai.com'
+      const modelsUrl = `${effectiveBaseUrl.replace(/\/$/, '')}/v1/models`
+
+      ipcLog.info(`[testOpenAiConnection] Testing: ${modelsUrl}`)
+
+      const response = await fetch(modelsUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${trimmedKey}`,
+          'Content-Type': 'application/json',
+        },
+      })
+
+      if (response.ok) {
+        if (normalizedModels.length > 0) {
+          try {
+            const payload = await response.json()
+            const available = new Set((payload?.data ?? []).map((item: { id?: string }) => item.id).filter(Boolean))
+            const missing = normalizedModels.filter(model => !available.has(model))
+            if (missing.length > 0) {
+              return { success: false, error: `Model "${missing[0]}" not found. Check the model name and try again.` }
+            }
+          } catch (parseError) {
+            const msg = parseError instanceof Error ? parseError.message : String(parseError)
+            return { success: false, error: `Failed to parse model list: ${msg.slice(0, 200)}` }
+          }
+        }
+        ipcLog.info('[testOpenAiConnection] Success')
+        return { success: true }
+      }
+
+      // Handle specific error codes
+      if (response.status === 401) {
+        return { success: false, error: 'Invalid API key' }
+      }
+
+      if (response.status === 403) {
+        return { success: false, error: 'API key does not have permission to access this resource' }
+      }
+
+      if (response.status === 404) {
+        return { success: false, error: 'API endpoint not found. Check the base URL.' }
+      }
+
+      if (response.status === 429) {
+        return { success: false, error: 'Rate limit exceeded. Please try again.' }
+      }
+
+      // Try to extract error message from response
+      try {
+        const errorData = await response.json()
+        const errorMessage = errorData?.error?.message || `API error: ${response.status}`
+        return { success: false, error: errorMessage }
+      } catch {
+        return { success: false, error: `API error: ${response.status} ${response.statusText}` }
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      const lowerMsg = msg.toLowerCase()
+      ipcLog.info(`[testOpenAiConnection] Error: ${msg.slice(0, 500)}`)
+
+      // Connection errors
+      if (lowerMsg.includes('econnrefused') || lowerMsg.includes('enotfound') || lowerMsg.includes('fetch failed')) {
+        return { success: false, error: 'Cannot connect to API server. Check the URL and your network connection.' }
+      }
+
+      return { success: false, error: msg.slice(0, 300) }
+    }
   })
 
   // ============================================================
@@ -1438,10 +1626,10 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     return session?.model ?? null
   })
 
-  // Set session-specific model
-  ipcMain.handle(IPC_CHANNELS.SESSION_SET_MODEL, async (_event, sessionId: string, workspaceId: string, model: string | null) => {
-    await sessionManager.updateSessionModel(sessionId, workspaceId, model)
-    ipcLog.info(`Session ${sessionId} model updated to: ${model}`)
+  // Set session-specific model (and optionally connection)
+  ipcMain.handle(IPC_CHANNELS.SESSION_SET_MODEL, async (_event, sessionId: string, workspaceId: string, model: string | null, connection?: string) => {
+    await sessionManager.updateSessionModel(sessionId, workspaceId, model, connection)
+    ipcLog.info(`Session ${sessionId} model updated to: ${model}${connection ? ` (connection: ${connection})` : ''}`)
   })
 
   // Open native folder dialog for selecting working directory
@@ -1478,18 +1666,27 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       workingDirectory: config?.defaults?.workingDirectory,
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
       defaultChatFilter: config?.defaults?.defaultChatFilter,
+      defaultLlmConnection: config?.defaults?.defaultLlmConnection,
     }
   })
 
   // Update a workspace setting
-  // Valid keys: 'name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled'
+  // Valid keys: 'name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled', 'defaultLlmConnection'
   ipcMain.handle(IPC_CHANNELS.WORKSPACE_SETTINGS_UPDATE, async (_event, workspaceId: string, key: string, value: unknown) => {
     const workspace = getWorkspaceOrThrow(workspaceId)
 
     // Validate key is a known workspace setting
-    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled', 'defaultChatFilter']
+    const validKeys = ["name", "model", "enabledSourceSlugs", "permissionMode", "cyclablePermissionModes", "thinkingLevel", "workingDirectory", "localMcpEnabled", "defaultChatFilter", "defaultLlmConnection"]
     if (!validKeys.includes(key)) {
       throw new Error(`Invalid workspace setting key: ${key}. Valid keys: ${validKeys.join(', ')}`)
+    }
+
+    // Validate defaultLlmConnection exists before saving
+    if (key === 'defaultLlmConnection' && value !== undefined && value !== null) {
+      const { getLlmConnection } = await import('@craft-agent/shared/config/storage')
+      if (!getLlmConnection(value as string)) {
+        throw new Error(`LLM connection "${value}" not found`)
+      }
     }
 
     const { loadWorkspaceConfig, saveWorkspaceConfig } = await import('@craft-agent/shared/workspaces')
@@ -1564,6 +1761,548 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   // Get all drafts (for loading on app start)
   ipcMain.handle(IPC_CHANNELS.DRAFTS_GET_ALL, async () => {
     return getAllSessionDrafts()
+  })
+
+  // ============================================================
+  // LLM Connections (provider configurations)
+  // ============================================================
+
+  // List all LLM connections (includes built-in and custom)
+  ipcMain.handle(IPC_CHANNELS.LLM_CONNECTION_LIST, async (): Promise<LlmConnection[]> => {
+    return getLlmConnections()
+  })
+
+  // List all LLM connections with authentication status
+  ipcMain.handle(IPC_CHANNELS.LLM_CONNECTION_LIST_WITH_STATUS, async (): Promise<LlmConnectionWithStatus[]> => {
+    const connections = getLlmConnections()
+    const credentialManager = getCredentialManager()
+    const defaultSlug = getDefaultLlmConnection()
+
+    return Promise.all(connections.map(async (conn): Promise<LlmConnectionWithStatus> => {
+      // Check if credentials exist for this connection
+      const hasCredentials = await credentialManager.hasLlmCredentials(conn.slug, conn.authType)
+      return {
+        ...conn,
+        isAuthenticated: conn.authType === 'none' || hasCredentials,
+        isDefault: conn.slug === defaultSlug,
+      }
+    }))
+  })
+
+  // Get a specific LLM connection by slug
+  ipcMain.handle(IPC_CHANNELS.LLM_CONNECTION_GET, async (_event, slug: string): Promise<LlmConnection | null> => {
+    return getLlmConnection(slug)
+  })
+
+  // Save (create or update) an LLM connection
+  // If connection.slug exists and is found, updates it; otherwise creates new
+  ipcMain.handle(IPC_CHANNELS.LLM_CONNECTION_SAVE, async (_event, connection: LlmConnection): Promise<{ success: boolean; error?: string }> => {
+    try {
+      // Check if this is an update or create
+      const existing = getLlmConnection(connection.slug)
+      if (existing) {
+        // Update existing connection (can't change slug)
+        const { slug: _slug, ...updates } = connection
+        const success = updateLlmConnection(connection.slug, updates)
+        if (!success) {
+          return { success: false, error: 'Failed to update connection' }
+        }
+      } else {
+        // Create new connection
+        const success = addLlmConnection(connection)
+        if (!success) {
+          return { success: false, error: 'Connection with this slug already exists' }
+        }
+      }
+      ipcLog.info(`LLM connection saved: ${connection.slug}`)
+      // Reinitialize auth if the saved connection is the current default
+      // (updates env vars and summarization model override)
+      const defaultSlug = getDefaultLlmConnection()
+      if (defaultSlug === connection.slug) {
+        await sessionManager.reinitializeAuth()
+      }
+      return { success: true }
+    } catch (error) {
+      ipcLog.error('Failed to save LLM connection:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+
+  // Delete an LLM connection (at least one connection must remain)
+  ipcMain.handle(IPC_CHANNELS.LLM_CONNECTION_DELETE, async (_event, slug: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const connection = getLlmConnection(slug)
+      if (!connection) {
+        return { success: false, error: 'Connection not found' }
+      }
+      // deleteLlmConnection handles the "at least one must remain" check
+      const success = deleteLlmConnection(slug)
+      if (success) {
+        // Also delete associated credentials
+        const credentialManager = getCredentialManager()
+        await credentialManager.deleteLlmCredentials(slug)
+        ipcLog.info(`LLM connection deleted: ${slug}`)
+      }
+      return { success }
+    } catch (error) {
+      ipcLog.error('Failed to delete LLM connection:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+
+  // Test an LLM connection (validate credentials and connectivity with actual API call)
+  ipcMain.handle(IPC_CHANNELS.LLM_CONNECTION_TEST, async (_event, slug: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const connection = getLlmConnection(slug)
+      if (!connection) {
+        return { success: false, error: 'Connection not found' }
+      }
+
+      // Check if connection has valid credentials
+      const credentialManager = getCredentialManager()
+      const hasCredentials = await credentialManager.hasLlmCredentials(slug, connection.authType)
+      if (!hasCredentials && connection.authType !== 'none') {
+        return { success: false, error: 'No credentials configured' }
+      }
+
+      // ========================================
+      // Codex/ChatGPT OAuth validation
+      // ========================================
+      const isOpenAiProvider = connection.providerType === 'openai' || connection.providerType === 'openai_compat'
+      if (connection.providerType === 'openai_compat' && !connection.defaultModel) {
+        return { success: false, error: 'Default model is required for OpenAI-compatible providers.' }
+      }
+      if (isOpenAiProvider && connection.authType === 'oauth') {
+        // Get stored ChatGPT tokens
+        const oauth = await credentialManager.getLlmOAuth(slug)
+        if (!oauth?.refreshToken) {
+          return { success: false, error: 'No refresh token available. Please re-authenticate.' }
+        }
+
+        // Validate by attempting to refresh tokens
+        try {
+          const { refreshChatGptTokens } = await import('@craft-agent/shared/auth/chatgpt-oauth')
+          const refreshed = await refreshChatGptTokens(oauth.refreshToken)
+
+          // Store the refreshed tokens
+          await credentialManager.setLlmOAuth(slug, {
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken,
+            expiresAt: refreshed.expiresAt,
+            idToken: refreshed.idToken,
+          })
+
+          ipcLog.info(`LLM connection validated (ChatGPT OAuth refreshed): ${slug}`)
+          touchLlmConnection(slug)
+          return { success: true }
+        } catch (refreshError) {
+          const msg = refreshError instanceof Error ? refreshError.message : String(refreshError)
+          ipcLog.info(`[LLM_CONNECTION_TEST] ChatGPT OAuth refresh failed for ${slug}: ${msg}`)
+          return { success: false, error: 'ChatGPT authentication expired. Please re-authenticate.' }
+        }
+      }
+
+      if (isOpenAiProvider && connection.authType !== 'oauth') {
+        const apiKey = (connection.authType === 'api_key' || connection.authType === 'api_key_with_endpoint' || connection.authType === 'bearer_token')
+          ? await credentialManager.getLlmApiKey(slug)
+          : null
+
+        if (!apiKey && connection.authType !== 'none') {
+          return { success: false, error: 'Could not retrieve credentials' }
+        }
+
+        const modelList = (connection.models ?? []).map(m => (typeof m === 'string' ? m : m.id)).filter(Boolean)
+        if (modelList.length > 0 && connection.defaultModel && !modelList.includes(connection.defaultModel)) {
+          return { success: false, error: `Default model "${connection.defaultModel}" is not in the configured model list.` }
+        }
+
+        const effectiveBaseUrl = (connection.baseUrl || 'https://api.openai.com').replace(/\/$/, '')
+        const modelsUrl = `${effectiveBaseUrl}/v1/models`
+        const response = await fetch(modelsUrl, {
+          method: 'GET',
+          headers: {
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            'Content-Type': 'application/json',
+          },
+        })
+
+        if (response.ok) {
+          if (modelList.length > 0) {
+            try {
+              const payload = await response.json()
+              const available = new Set((payload?.data ?? []).map((item: { id?: string }) => item.id).filter(Boolean))
+              const missing = modelList.filter(model => !available.has(model))
+              if (missing.length > 0) {
+                return { success: false, error: `Model "${missing[0]}" not found. Check the model name and try again.` }
+              }
+            } catch (parseError) {
+              const msg = parseError instanceof Error ? parseError.message : String(parseError)
+              return { success: false, error: `Failed to parse model list: ${msg.slice(0, 200)}` }
+            }
+          }
+
+          ipcLog.info(`LLM connection validated: ${slug}`)
+          touchLlmConnection(slug)
+          return { success: true }
+        }
+
+        if (response.status === 401) {
+          return { success: false, error: 'Invalid API key' }
+        }
+        if (response.status === 403) {
+          return { success: false, error: 'API key does not have permission to access this resource' }
+        }
+        if (response.status === 404) {
+          return { success: false, error: 'API endpoint not found. Check the base URL.' }
+        }
+        if (response.status === 429) {
+          return { success: false, error: 'Rate limit exceeded. Please try again.' }
+        }
+
+        try {
+          const errorData = await response.json()
+          const errorMessage = errorData?.error?.message || `API error: ${response.status}`
+          return { success: false, error: errorMessage }
+        } catch {
+          return { success: false, error: `API error: ${response.status} ${response.statusText}` }
+        }
+      }
+
+      // ========================================
+      // Claude Max OAuth validation (token refresh only)
+      // ========================================
+      // NOTE: The standard Anthropic API doesn't support OAuth - only the Claude Code SDK
+      // has special internal handling for it. So we validate by ensuring the token can be
+      // refreshed successfully, without making an API call.
+      const isAnthropicProvider = connection.providerType === 'anthropic' || connection.providerType === 'anthropic_compat'
+      if (isAnthropicProvider && connection.authType === 'oauth') {
+        const { getValidClaudeOAuthToken } = await import('@craft-agent/shared/auth/state')
+        const tokenResult = await getValidClaudeOAuthToken(slug)
+
+        if (!tokenResult.accessToken) {
+          const errorMsg = tokenResult.migrationRequired?.message || 'OAuth token expired. Please re-authenticate.'
+          return { success: false, error: errorMsg }
+        }
+
+        // Token is valid (refreshed if needed) - connection is working
+        ipcLog.info(`LLM connection validated (OAuth token valid): ${slug}`)
+        touchLlmConnection(slug)
+        return { success: true }
+      }
+
+      // ========================================
+      // Anthropic API Key / Anthropic-compatible validation
+      // ========================================
+      // Handles anthropic, anthropic_compat, bedrock, vertex providers (all use Anthropic SDK)
+      const usesAnthropicSdk = connection.providerType === 'anthropic' ||
+                               connection.providerType === 'anthropic_compat' ||
+                               connection.providerType === 'bedrock' ||
+                               connection.providerType === 'vertex'
+      if (usesAnthropicSdk) {
+        // Compat providers require an explicit default model
+        if (connection.providerType === 'anthropic_compat' && !connection.defaultModel) {
+          return { success: false, error: 'Default model is required for Anthropic-compatible providers.' }
+        }
+
+        // OpenAI-compatible connections validated via OpenAI path below
+        // Skip validation for auth types that require cloud SDK integration (not yet implemented)
+        if (connection.authType === 'iam_credentials') {
+          ipcLog.info(`LLM connection skipped validation (AWS IAM not implemented): ${slug}`)
+          touchLlmConnection(slug)
+          return { success: true }
+        }
+        if (connection.authType === 'service_account_file') {
+          ipcLog.info(`LLM connection skipped validation (GCP service account not implemented): ${slug}`)
+          touchLlmConnection(slug)
+          return { success: true }
+        }
+
+        const Anthropic = (await import('@anthropic-ai/sdk')).default
+
+        // Get the appropriate credential based on auth type
+        let authKey: string | null = null
+        let useBearer = false // Whether to use Bearer token (authToken) vs x-api-key header
+
+        if (connection.authType === 'api_key' || connection.authType === 'api_key_with_endpoint') {
+          authKey = await credentialManager.getLlmApiKey(slug)
+        } else if (connection.authType === 'bearer_token') {
+          authKey = await credentialManager.getLlmApiKey(slug) // Same storage, different header
+          useBearer = true
+        } else if (connection.authType === 'environment') {
+          // Use environment variable (ANTHROPIC_API_KEY)
+          authKey = process.env.ANTHROPIC_API_KEY || null
+          if (!authKey) {
+            return { success: false, error: 'ANTHROPIC_API_KEY environment variable not set' }
+          }
+        } else if (connection.authType === 'none') {
+          // For 'none' auth type (e.g., local Ollama), use a dummy token
+          authKey = 'ollama'
+        }
+
+        if (!authKey && connection.authType !== 'none') {
+          return { success: false, error: 'Could not retrieve credentials' }
+        }
+
+        // Build client config based on connection type
+        const baseUrl = connection.baseUrl
+        const isCustomUrl = !!baseUrl
+
+        // Determine auth header type:
+        // - Bearer token: explicit bearer_token auth type OR custom URL (OpenAI-compatible endpoints)
+        // - x-api-key: standard Anthropic API
+        const useBearerAuth = useBearer || isCustomUrl
+
+        const client = new Anthropic({
+          ...(isCustomUrl ? { baseURL: baseUrl } : {}),
+          ...(useBearerAuth
+            ? { authToken: authKey || 'ollama', apiKey: null }  // Bearer for custom URLs
+            : { apiKey: authKey, authToken: null }              // x-api-key for Anthropic API
+          ),
+        })
+
+        const modelIds = (connection.models ?? []).map(m => (typeof m === 'string' ? m : m.id)).filter(Boolean)
+
+        if (connection.providerType === 'anthropic_compat' && modelIds.length > 0) {
+          if (connection.defaultModel && !modelIds.includes(connection.defaultModel)) {
+            return { success: false, error: `Default model "${connection.defaultModel}" is not in the configured model list.` }
+          }
+          for (const modelId of modelIds) {
+            try {
+              await client.messages.create({
+                model: modelId,
+                max_tokens: 16,
+                messages: [{ role: 'user', content: 'hi' }],
+                tools: [{
+                  name: 'test_tool',
+                  description: 'Test tool for validation',
+                  input_schema: { type: 'object' as const, properties: {} }
+                }]
+              })
+            } catch (error) {
+              const msg = error instanceof Error ? error.message : String(error)
+              return { success: false, error: `Model "${modelId}" failed validation: ${msg.slice(0, 300)}` }
+            }
+          }
+
+          ipcLog.info(`LLM connection validated: ${slug}`)
+          touchLlmConnection(slug)
+          return { success: true }
+        }
+
+        // Use connection's default model (always set via backfill)
+        const testModel = connection.defaultModel!
+
+        // Make a minimal API call to validate the connection
+        await client.messages.create({
+          model: testModel,
+          max_tokens: 16,
+          messages: [{ role: 'user', content: 'hi' }],
+          tools: [{
+            name: 'test_tool',
+            description: 'Test tool for validation',
+            input_schema: { type: 'object' as const, properties: {} }
+          }]
+        })
+
+        ipcLog.info(`LLM connection validated: ${slug}`)
+        touchLlmConnection(slug)
+        return { success: true }
+      }
+
+      // Unknown connection type - just validate credentials exist
+      ipcLog.info(`LLM connection validated (credentials only): ${slug}`)
+      touchLlmConnection(slug)
+      return { success: true }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      const lowerMsg = msg.toLowerCase()
+      ipcLog.info(`[LLM_CONNECTION_TEST] Error for ${slug}: ${msg.slice(0, 500)}`)
+
+      // Connection errors — server unreachable
+      if (lowerMsg.includes('econnrefused') || lowerMsg.includes('enotfound') || lowerMsg.includes('fetch failed')) {
+        return { success: false, error: 'Cannot connect to API server. Check the URL and ensure the server is running.' }
+      }
+
+      // 404 on endpoint
+      if (lowerMsg.includes('404') && !lowerMsg.includes('model')) {
+        return { success: false, error: 'Endpoint not found. Ensure the server supports the Anthropic Messages API.' }
+      }
+
+      // Auth errors
+      if (lowerMsg.includes('401') || lowerMsg.includes('unauthorized') || lowerMsg.includes('authentication')) {
+        return { success: false, error: 'Authentication failed. Check your API key or OAuth token.' }
+      }
+
+      // Rate limit / quota errors
+      if (lowerMsg.includes('429') || lowerMsg.includes('rate limit') || lowerMsg.includes('quota')) {
+        return { success: false, error: 'Rate limited or quota exceeded. Try again later.' }
+      }
+
+      // Credit/billing errors
+      if (lowerMsg.includes('credit') || lowerMsg.includes('billing') || lowerMsg.includes('insufficient')) {
+        return { success: false, error: 'Billing issue. Check your account credits or payment method.' }
+      }
+
+      // Model not found
+      if (lowerMsg.includes('model not found') || lowerMsg.includes('invalid model')) {
+        return { success: false, error: 'Model not found. Check the connection configuration.' }
+      }
+
+      // Fallback
+      return { success: false, error: msg.slice(0, 200) }
+    }
+  })
+
+  // Set global default LLM connection
+  ipcMain.handle(IPC_CHANNELS.LLM_CONNECTION_SET_DEFAULT, async (_event, slug: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const success = setDefaultLlmConnection(slug)
+      if (success) {
+        ipcLog.info(`Global default LLM connection set to: ${slug}`)
+        // Reinitialize auth so env vars and summarization model override match the new default
+        await sessionManager.reinitializeAuth()
+      }
+      return { success, error: success ? undefined : 'Connection not found' }
+    } catch (error) {
+      ipcLog.error('Failed to set default LLM connection:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+
+  // Set workspace default LLM connection
+  ipcMain.handle(IPC_CHANNELS.LLM_CONNECTION_SET_WORKSPACE_DEFAULT, async (_event, workspaceId: string, slug: string | null): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const workspace = getWorkspaceOrThrow(workspaceId)
+
+      // Validate connection exists if setting (not clearing)
+      if (slug) {
+        const connection = getLlmConnection(slug)
+        if (!connection) {
+          return { success: false, error: 'Connection not found' }
+        }
+      }
+
+      const { loadWorkspaceConfig, saveWorkspaceConfig } = await import('@craft-agent/shared/workspaces')
+      const config = loadWorkspaceConfig(workspace.rootPath)
+      if (!config) {
+        return { success: false, error: 'Failed to load workspace config' }
+      }
+
+      // Update workspace defaults
+      config.defaults = config.defaults || {}
+      if (slug) {
+        config.defaults.defaultLlmConnection = slug
+      } else {
+        delete config.defaults.defaultLlmConnection
+      }
+
+      saveWorkspaceConfig(workspace.rootPath, config)
+      ipcLog.info(`Workspace ${workspaceId} default LLM connection set to: ${slug}`)
+      return { success: true }
+    } catch (error) {
+      ipcLog.error('Failed to set workspace default LLM connection:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+
+  // ============================================================
+  // ChatGPT OAuth (for Codex chatgptAuthTokens mode)
+  // ============================================================
+
+  // Start ChatGPT OAuth flow
+  // Opens browser for authentication, waits for callback, exchanges code for tokens
+  ipcMain.handle(IPC_CHANNELS.CHATGPT_START_OAUTH, async (_event, connectionSlug: string): Promise<{
+    success: boolean
+    error?: string
+  }> => {
+    try {
+      const { startChatGptOAuth, exchangeChatGptCode } = await import('@craft-agent/shared/auth')
+      const credentialManager = getCredentialManager()
+
+      ipcLog.info(`Starting ChatGPT OAuth flow for connection: ${connectionSlug}`)
+
+      // Start OAuth and wait for authorization code
+      const code = await startChatGptOAuth((status) => {
+        ipcLog.info(`[ChatGPT OAuth] ${status}`)
+      })
+
+      // Exchange code for tokens
+      const tokens = await exchangeChatGptCode(code, (status) => {
+        ipcLog.info(`[ChatGPT OAuth] ${status}`)
+      })
+
+      // Store both tokens properly in credential manager
+      // OpenAI OIDC returns both: idToken (JWT for identity) and accessToken (for API access)
+      await credentialManager.setLlmOAuth(connectionSlug, {
+        accessToken: tokens.accessToken,  // Store actual accessToken
+        idToken: tokens.idToken,           // Store idToken separately
+        refreshToken: tokens.refreshToken,
+        expiresAt: tokens.expiresAt,
+      })
+
+      ipcLog.info('ChatGPT OAuth completed successfully')
+      return { success: true }
+    } catch (error) {
+      ipcLog.error('ChatGPT OAuth failed:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'OAuth authentication failed',
+      }
+    }
+  })
+
+  // Cancel ongoing ChatGPT OAuth flow
+  ipcMain.handle(IPC_CHANNELS.CHATGPT_CANCEL_OAUTH, async (): Promise<{ success: boolean }> => {
+    try {
+      const { cancelChatGptOAuth } = await import('@craft-agent/shared/auth')
+      cancelChatGptOAuth()
+      ipcLog.info('ChatGPT OAuth cancelled')
+      return { success: true }
+    } catch (error) {
+      ipcLog.error('Failed to cancel ChatGPT OAuth:', error)
+      return { success: false }
+    }
+  })
+
+  // Get ChatGPT authentication status
+  ipcMain.handle(IPC_CHANNELS.CHATGPT_GET_AUTH_STATUS, async (_event, connectionSlug: string): Promise<{
+    authenticated: boolean
+    expiresAt?: number
+    hasRefreshToken?: boolean
+  }> => {
+    try {
+      const credentialManager = getCredentialManager()
+      const creds = await credentialManager.getLlmOAuth(connectionSlug)
+
+      if (!creds) {
+        return { authenticated: false }
+      }
+
+      // Check if expired (with 5-minute buffer)
+      const isExpired = creds.expiresAt && Date.now() > creds.expiresAt - 5 * 60 * 1000
+
+      return {
+        authenticated: !isExpired || !!creds.refreshToken, // Can refresh if has refresh token
+        expiresAt: creds.expiresAt,
+        hasRefreshToken: !!creds.refreshToken,
+      }
+    } catch (error) {
+      ipcLog.error('Failed to get ChatGPT auth status:', error)
+      return { authenticated: false }
+    }
+  })
+
+  // Logout from ChatGPT (clear stored tokens)
+  ipcMain.handle(IPC_CHANNELS.CHATGPT_LOGOUT, async (_event, connectionSlug: string): Promise<{ success: boolean }> => {
+    try {
+      const credentialManager = getCredentialManager()
+      await credentialManager.deleteLlmCredentials(connectionSlug)
+      ipcLog.info('ChatGPT credentials cleared')
+      return { success: true }
+    } catch (error) {
+      ipcLog.error('Failed to clear ChatGPT credentials:', error)
+      return { success: false }
+    }
   })
 
   // ============================================================
@@ -1669,8 +2408,6 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
           }
         }, 100)
       })
-
-      ipcLog.info(`Watching session files: ${sessionId}`)
     } catch (error) {
       ipcLog.error('Failed to start session file watcher:', error)
     }
@@ -1687,7 +2424,6 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       fileChangeDebounceTimer = null
     }
     if (watchedSessionId) {
-      ipcLog.info(`Stopped watching session files: ${watchedSessionId}`)
       watchedSessionId = null
     }
   })
@@ -1833,7 +2569,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
 
     try {
       const content = readFileSync(path, 'utf-8')
-      return JSON.parse(content)
+      return safeJsonParse(content)
     } catch (error) {
       ipcLog.error('Error reading permissions config:', error)
       return null
@@ -1854,7 +2590,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
 
     try {
       const content = readFileSync(path, 'utf-8')
-      return JSON.parse(content)
+      return safeJsonParse(content)
     } catch (error) {
       ipcLog.error('Error reading workspace permissions config:', error)
       return null
@@ -1873,7 +2609,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
 
     try {
       const content = readFileSync(defaultPath, 'utf-8')
-      return { config: JSON.parse(content), path: defaultPath }
+      return { config: safeJsonParse(content), path: defaultPath }
     } catch (error) {
       ipcLog.error('Error reading default permissions config:', error)
       return { config: null, path: defaultPath }
@@ -2027,17 +2763,15 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   // Skills (Workspace-scoped)
   // ============================================================
 
-  // Get all skills for a workspace (and optionally project-level skills from workingDirectory)
-  ipcMain.handle(IPC_CHANNELS.SKILLS_GET, async (_event, workspaceId: string, workingDirectory?: string) => {
-    ipcLog.info(`SKILLS_GET: Loading skills for workspace: ${workspaceId}${workingDirectory ? `, workingDirectory: ${workingDirectory}` : ''}`)
+  // Get all skills for a workspace
+  ipcMain.handle(IPC_CHANNELS.SKILLS_GET, async (_event, workspaceId: string) => {
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) {
       ipcLog.error(`SKILLS_GET: Workspace not found: ${workspaceId}`)
       return []
     }
-    const { loadAllSkills } = await import('@craft-agent/shared/skills')
-    const skills = loadAllSkills(workspace.rootPath, workingDirectory)
-    ipcLog.info(`SKILLS_GET: Loaded ${skills.length} skills from ${workspace.rootPath}`)
+    const { loadWorkspaceSkills } = await import('@craft-agent/shared/skills')
+    const skills = loadWorkspaceSkills(workspace.rootPath)
     return skills
   })
 
@@ -2486,6 +3220,10 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   registerOnboardingHandlers(sessionManager)
 
   // ============================================================
+  // Backend Capabilities (for capabilities-driven UI)
+  // ============================================================
+
+  // ============================================================
   // Theme (app-level only)
   // ============================================================
 
@@ -2604,7 +3342,6 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   ipcMain.handle(IPC_CHANNELS.LOGO_GET_URL, async (_event, serviceUrl: string, provider?: string) => {
     const { getLogoUrl } = await import('@craft-agent/shared/utils/logo')
     const result = getLogoUrl(serviceUrl, provider)
-    console.log(`[logo] getLogoUrl("${serviceUrl}", "${provider}") => "${result}"`)
     return result
   })
 
@@ -2670,6 +3407,22 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   ipcMain.handle(IPC_CHANNELS.INPUT_SET_SPELL_CHECK, async (_event, enabled: boolean) => {
     const { setSpellCheck } = await import('@craft-agent/shared/config/storage')
     setSpellCheck(enabled)
+  })
+
+  // Get keep awake while running setting
+  ipcMain.handle(IPC_CHANNELS.POWER_GET_KEEP_AWAKE, async () => {
+    const { getKeepAwakeWhileRunning } = await import('@craft-agent/shared/config/storage')
+    return getKeepAwakeWhileRunning()
+  })
+
+  // Set keep awake while running setting
+  ipcMain.handle(IPC_CHANNELS.POWER_SET_KEEP_AWAKE, async (_event, enabled: boolean) => {
+    const { setKeepAwakeWhileRunning } = await import('@craft-agent/shared/config/storage')
+    const { setKeepAwakeSetting } = await import('./power-manager')
+    // Save to config
+    setKeepAwakeWhileRunning(enabled)
+    // Update the power manager's cached value and power state
+    setKeepAwakeSetting(enabled)
   })
 
   // Update app badge count

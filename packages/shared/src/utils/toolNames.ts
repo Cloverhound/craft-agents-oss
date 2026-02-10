@@ -9,6 +9,19 @@
  * Display names for specific tools that need custom names
  */
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  // Built-in tools
+  'Glob': 'Finding Files',
+  'Grep': 'Searching Files',
+  'Read': 'Reading File',
+  'Write': 'Writing File',
+  'Edit': 'Editing File',
+  'Bash': 'Running Command',
+  'Task': 'Running Agent',
+  'WebFetch': 'Fetching URL',
+  'WebSearch': 'Searching Web',
+  'TodoWrite': 'Updating Tasks',
+  'NotebookEdit': 'Editing Notebook',
+
   // Documentation tools
   'SearchCraftAgents': 'Search Documentation',
 };

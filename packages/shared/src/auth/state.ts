@@ -12,19 +12,64 @@
  */
 
 import { getCredentialManager } from '../credentials/index.ts';
-import { loadStoredConfig, getActiveWorkspace, type AuthType, type Workspace } from '../config/storage.ts';
+import {
+  loadStoredConfig,
+  getActiveWorkspace,
+  getDefaultLlmConnection,
+  getLlmConnection,
+  type AuthType,
+  type Workspace,
+} from '../config/storage.ts';
 import { refreshClaudeToken, isTokenExpired } from './claude-token.ts';
 import { debug } from '../utils/debug.ts';
-import type { AuthState, SetupNeeds, MigrationInfo } from './types.ts';
 
 // ============================================
 // Types
 // ============================================
 
+/** Migration info when user needs to re-authenticate */
+export interface MigrationInfo {
+  reason: 'legacy_token';
+  message: string;
+}
+
 /** Result of token validation/refresh operations */
 export interface TokenResult {
   accessToken: string | null;
   migrationRequired?: MigrationInfo;
+}
+
+export interface AuthState {
+  /** Claude API billing configuration */
+  billing: {
+    /** Configured billing type, or null if not yet configured */
+    type: AuthType | null;
+    /** True if we have the required credentials for the configured billing type */
+    hasCredentials: boolean;
+    /** Anthropic API key (if using api_key auth type) */
+    apiKey: string | null;
+    /** Claude Max OAuth token (if using oauth_token auth type) */
+    claudeOAuthToken: string | null;
+    /** Migration info if user needs to re-authenticate */
+    migrationRequired?: MigrationInfo;
+  };
+
+  /** Workspace/MCP configuration */
+  workspace: {
+    hasWorkspace: boolean;
+    active: Workspace | null;
+  };
+}
+
+export interface SetupNeeds {
+  /** No billing type configured → show billing picker */
+  needsBillingConfig: boolean;
+  /** Billing type set but missing credentials → show credential entry */
+  needsCredentials: boolean;
+  /** Everything complete → go straight to App */
+  isFullyConfigured: boolean;
+  /** User has legacy tokens that need migration */
+  needsMigration?: MigrationInfo;
 }
 
 // ============================================
@@ -42,7 +87,8 @@ let refreshInProgress: Promise<TokenResult> | null = null;
 export async function performTokenRefresh(
   manager: ReturnType<typeof getCredentialManager>,
   refreshToken: string,
-  originalSource: 'native' | 'cli' | undefined
+  originalSource: 'native' | 'cli' | undefined,
+  connectionSlug: string
 ): Promise<TokenResult> {
   try {
     const refreshed = await refreshClaudeToken(refreshToken);
@@ -59,6 +105,14 @@ export async function performTokenRefresh(
       refreshToken: refreshed.refreshToken,
       expiresAt: refreshed.expiresAt,
       source: 'native',
+    });
+
+    // Also save to LLM connection (dual-write for backwards compatibility)
+    // This ensures both legacy and modern auth paths have the refreshed token
+    await manager.setLlmOAuth(connectionSlug, {
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      expiresAt: refreshed.expiresAt,
     });
 
     return { accessToken: refreshed.accessToken };
@@ -92,11 +146,15 @@ export async function performTokenRefresh(
       }
 
       // Clear the incompatible credentials to force fresh authentication
+      // Clear from both legacy and LLM connection locations
       await manager.setClaudeOAuthCredentials({
         accessToken: '',
         refreshToken: undefined,
         expiresAt: undefined,
       });
+
+      // Also clear from LLM connection (dual-clear for consistency)
+      await manager.deleteLlmCredentials(connectionSlug);
     }
 
     // Token refresh failed - return null token with optional migration info
@@ -124,7 +182,7 @@ export async function performTokenRefresh(
  * - We NO LONGER import tokens from Claude CLI keychain
  * - Legacy tokens are detected and cleared, prompting re-authentication
  */
-export async function getValidClaudeOAuthToken(): Promise<TokenResult> {
+export async function getValidClaudeOAuthToken(connectionSlug: string): Promise<TokenResult> {
   const manager = getCredentialManager();
 
   // Try to get credentials from our store
@@ -163,7 +221,7 @@ export async function getValidClaudeOAuthToken(): Promise<TokenResult> {
 
       // Start the refresh and set the mutex
       debug('[auth] Starting token refresh (holding mutex)');
-      refreshInProgress = performTokenRefresh(manager, creds.refreshToken, creds.source);
+      refreshInProgress = performTokenRefresh(manager, creds.refreshToken, creds.source, connectionSlug);
 
       try {
         const result = await refreshInProgress;
@@ -183,31 +241,72 @@ export async function getValidClaudeOAuthToken(): Promise<TokenResult> {
 
 /**
  * Get complete authentication state from all sources (config file + credential store)
+ *
+ * Uses LLM connections as the source of truth for auth type and credentials.
+ * Falls back to legacy global credentials for backwards compatibility.
  */
 export async function getAuthState(): Promise<AuthState> {
   const config = loadStoredConfig();
   const manager = getCredentialManager();
-
-  const apiKey = await manager.getApiKey();
-  const tokenResult = await getValidClaudeOAuthToken();
   const activeWorkspace = getActiveWorkspace();
 
-  // Determine if billing credentials are satisfied based on auth type
+  // Get the default LLM connection to determine auth type
+  const defaultConnectionSlug = getDefaultLlmConnection();
+  const connection = defaultConnectionSlug ? getLlmConnection(defaultConnectionSlug) : null;
+
+  // Determine auth type from connection (no legacy fallback - migration ensures all users have connections)
+  let effectiveAuthType: AuthType | null = null;
+  if (connection) {
+    // Map connection authType to legacy AuthType format for backwards compatibility
+    // New auth types (api_key, api_key_with_endpoint, bearer_token) map to 'api_key'
+    // OAuth maps to 'oauth_token'
+    if (connection.authType === 'api_key' || connection.authType === 'api_key_with_endpoint' || connection.authType === 'bearer_token') {
+      effectiveAuthType = 'api_key';
+    } else if (connection.authType === 'oauth') {
+      effectiveAuthType = 'oauth_token';
+    }
+    // Other auth types (iam_credentials, service_account_file, environment, none) don't map to legacy types
+  }
+  // No fallback to legacy config.authType - if no connection, return unauthenticated state
+
+  // Check credentials based on the effective auth type and connection
   let hasCredentials = false;
-  if (config?.authType === 'api_key') {
-    // Keyless providers (Ollama) are valid when a custom base URL is configured
-    hasCredentials = !!apiKey || !!config?.anthropicBaseUrl;
-  } else if (config?.authType === 'oauth_token') {
-    hasCredentials = !!tokenResult.accessToken;
+  let apiKey: string | null = null;
+  let claudeOAuthToken: string | null = null;
+  let migrationRequired: MigrationInfo | undefined;
+
+  if (connection && defaultConnectionSlug) {
+    // Use LLM connection credentials
+    // Pass providerType for OAuth routing (OpenAI OAuth needs idToken)
+    hasCredentials = await manager.hasLlmCredentials(defaultConnectionSlug, connection.authType, connection.providerType);
+
+    if (connection.authType === 'api_key' || connection.authType === 'api_key_with_endpoint' || connection.authType === 'bearer_token') {
+      apiKey = await manager.getLlmApiKey(defaultConnectionSlug);
+      // Keyless providers (Ollama) are valid when a custom base URL is configured
+      if (!apiKey && connection.baseUrl) {
+        hasCredentials = true;
+      }
+    } else if (connection.authType === 'oauth') {
+      const llmOAuth = await manager.getLlmOAuth(defaultConnectionSlug);
+      if (llmOAuth?.accessToken) {
+        claudeOAuthToken = llmOAuth.accessToken;
+      }
+    }
+    // Other auth types (iam_credentials, service_account_file, environment, none) are handled by hasLlmCredentials
+    // OpenAI OAuth credentials are handled separately by CodexAgent
+  } else {
+    // No connection configured - credentials not available
+    // Legacy migration should have created a default connection
+    hasCredentials = false;
   }
 
   return {
     billing: {
-      type: config?.authType ?? null,
+      type: effectiveAuthType,
       hasCredentials,
       apiKey,
-      claudeOAuthToken: tokenResult.accessToken,
-      migrationRequired: tokenResult.migrationRequired,
+      claudeOAuthToken,
+      migrationRequired,
     },
     workspace: {
       hasWorkspace: !!activeWorkspace,

@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react"
+import { useAction, useActionLabel } from "@/actions"
 import { formatDistanceToNow, formatDistanceToNowStrict, isToday, isYesterday, format, startOfDay } from "date-fns"
 import type { Locale } from "date-fns"
-import { MoreHorizontal, Flag, Copy, Link2Off, CloudUpload, Globe, RefreshCw, Inbox } from "lucide-react"
+import { MoreHorizontal, Flag, Copy, Link2Off, CloudUpload, Globe, RefreshCw, Inbox, Check, Archive } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
@@ -46,9 +47,10 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { RenameDialog } from "@/components/ui/rename-dialog"
-import { useSession } from "@/hooks/useSession"
+import { useSessionSelection } from "@/hooks/useSession"
 import { useFocusZone, useRovingTabIndex } from "@/hooks/keyboard"
-import { useNavigation, useNavigationState, routes, isChatsNavigation, type ChatFilter } from "@/contexts/NavigationContext"
+import { useEscapeInterrupt } from "@/context/EscapeInterruptContext"
+import { useNavigation, useNavigationState, routes, isSessionsNavigation, type SessionFilter } from "@/contexts/NavigationContext"
 import { useFocusContext } from "@/context/FocusContext"
 import { getSessionTitle } from "@/utils/session"
 import type { SessionMeta } from "@/atoms/sessions"
@@ -155,14 +157,14 @@ interface FilterMatchOptions {
  * Used to split search results into "Matching Current Filters" vs "All Results".
  *
  * Filter layers:
- * 1. Primary filter (chatFilter) - "All Chats", "Flagged", specific state/label/view
+ * 1. Primary filter (sessionFilter) - "All Sessions", "Flagged", specific state/label/view
  * 2. Secondary filters (statusFilter, labelFilterMap) - user-applied chips on top
  *
  * A session must pass BOTH layers to be considered "matching".
  */
 function sessionMatchesCurrentFilter(
   session: SessionMeta,
-  currentFilter: ChatFilter | undefined,
+  currentFilter: SessionFilter | undefined,
   options: FilterMatchOptions = {}
 ): boolean {
   const { evaluateViews, statusFilter, labelFilterMap } = options
@@ -208,24 +210,35 @@ function sessionMatchesCurrentFilter(
   if (!currentFilter) return true
 
   switch (currentFilter.kind) {
-    case 'allChats':
-      return true // Secondary filters already checked above
+    case 'allSessions':
+      // Exclude archived sessions from All Sessions
+      return session.isArchived !== true
 
     case 'flagged':
-      return session.isFlagged === true
+      // Exclude archived sessions from Flagged view
+      return session.isFlagged === true && session.isArchived !== true
+
+    case 'archived':
+      // Only show archived sessions in Archived view
+      return session.isArchived === true
 
     case 'state':
       // Default to 'todo' for sessions without explicit todoState (matches getSessionTodoState logic)
-      return (session.todoState || 'todo') === currentFilter.stateId
+      // Exclude archived sessions from state views
+      return (session.todoState || 'todo') === currentFilter.stateId && session.isArchived !== true
 
     case 'label': {
       if (!session.labels?.length) return false
+      // Exclude archived sessions from label views
+      if (session.isArchived === true) return false
       if (currentFilter.labelId === '__all__') return true
       const labelIds = session.labels.map(l => parseLabelEntry(l).id)
       return labelIds.includes(currentFilter.labelId)
     }
 
     case 'view':
+      // Exclude archived sessions from view filters
+      if (session.isArchived === true) return false
       if (!evaluateViews) return true
       const matched = evaluateViews(session)
       if (currentFilter.viewId === '__all__') return matched.length > 0
@@ -284,6 +297,8 @@ interface SessionItemProps {
   onTodoStateChange: (sessionId: string, state: TodoStateId) => void
   onFlag?: (sessionId: string) => void
   onUnflag?: (sessionId: string) => void
+  onArchive?: (sessionId: string) => void
+  onUnarchive?: (sessionId: string) => void
   onMarkUnread: (sessionId: string) => void
   onDelete: (sessionId: string, skipConfirmation?: boolean) => Promise<boolean>
   onSelect: () => void
@@ -302,6 +317,16 @@ interface SessionItemProps {
   onLabelsChange?: (sessionId: string, labels: string[]) => void
   /** Number of matches in ChatDisplay (only set when session is selected and loaded) */
   chatMatchCount?: number
+  /** Whether multi-select mode is active (shows checkboxes) */
+  isMultiSelectActive?: boolean
+  /** Whether this item is in the multi-select set */
+  isInMultiSelect?: boolean
+  /** Toggle this item in multi-select (cmd/ctrl+click) */
+  onToggleSelect?: () => void
+  /** Range select to this item (shift+click) */
+  onRangeSelect?: () => void
+  /** Callback to focus the session-list zone (enables keyboard shortcuts) */
+  onFocusZone?: () => void
 }
 
 /**
@@ -320,6 +345,8 @@ function SessionItem({
   onTodoStateChange,
   onFlag,
   onUnflag,
+  onArchive,
+  onUnarchive,
   onMarkUnread,
   onDelete,
   onSelect,
@@ -331,12 +358,21 @@ function SessionItem({
   labels,
   onLabelsChange,
   chatMatchCount,
+  isMultiSelectActive,
+  isInMultiSelect,
+  onToggleSelect,
+  onRangeSelect,
+  onFocusZone,
 }: SessionItemProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [todoMenuOpen, setTodoMenuOpen] = useState(false)
   // Tracks which label badge's LabelValuePopover is open (by index), null = all closed
   const [openLabelIndex, setOpenLabelIndex] = useState<number | null>(null)
+
+  // Get hotkey labels from centralized action registry
+  const nextMatchHotkey = useActionLabel('chat.nextSearchMatch').hotkey
+  const prevMatchHotkey = useActionLabel('chat.prevSearchMatch').hotkey
 
   // Get current todo state from session properties
   const currentTodoState = getSessionTodoState(item)
@@ -358,7 +394,29 @@ function SessionItem({
   // Theme context for resolving label colors (light/dark aware)
   const { isDark } = useTheme()
 
-  const handleClick = () => {
+  const handleClick = (e: React.MouseEvent) => {
+    // Always activate session-list zone for keyboard navigation (arrow keys, Cmd+A, etc.)
+    onFocusZone?.()
+
+    // Handle multi-select modifier keys
+    const isMetaKey = e.metaKey || e.ctrlKey // Cmd on Mac, Ctrl on Windows
+    const isShiftKey = e.shiftKey
+
+    if (isMetaKey && onToggleSelect) {
+      // Cmd/Ctrl+click: toggle selection
+      e.preventDefault()
+      onToggleSelect()
+      return
+    }
+
+    if (isShiftKey && onRangeSelect) {
+      // Shift+click: range select
+      e.preventDefault()
+      onRangeSelect()
+      return
+    }
+
+    // Normal click: single select
     // Start perf tracking for session switch
     rendererPerf.startSessionSwitch(item.id)
     onSelect()
@@ -367,6 +425,16 @@ function SessionItem({
   const handleTodoStateSelect = (state: TodoStateId) => {
     setTodoMenuOpen(false)
     onTodoStateChange(item.id, state)
+  }
+
+  const handleArchiveFromMenu = () => {
+    setTodoMenuOpen(false)
+    onArchive?.(item.id)
+  }
+
+  const handleUnarchiveFromMenu = () => {
+    setTodoMenuOpen(false)
+    onUnarchive?.(item.id)
   }
 
   return (
@@ -385,6 +453,10 @@ function SessionItem({
       <ContextMenu modal={true} onOpenChange={setContextMenuOpen}>
         <ContextMenuTrigger asChild>
           <div className="session-content relative group select-none pl-2 mr-2">
+        {/* Multi-select indicator bar */}
+        {isInMultiSelect && (
+          <div className="absolute left-0 inset-y-0 w-[2px] bg-accent" />
+        )}
         {/* Todo State Icon - positioned absolutely, outside the button */}
         <Popover modal={true} open={todoMenuOpen} onOpenChange={setTodoMenuOpen}>
           <PopoverTrigger asChild>
@@ -424,6 +496,9 @@ function SessionItem({
               activeState={currentTodoState}
               onSelect={handleTodoStateSelect}
               states={todoStates}
+              isArchived={item.isArchived}
+              onArchive={handleArchiveFromMenu}
+              onUnarchive={handleUnarchiveFromMenu}
             />
           </PopoverContent>
         </Popover>
@@ -434,10 +509,12 @@ function SessionItem({
             "flex w-full items-start gap-2 pl-2 pr-4 py-3 text-left text-sm outline-none rounded-[8px]",
             // Fast hover transition (75ms vs default 150ms), selection is instant
             "transition-[background-color] duration-75",
-            isSelected
-              ? "bg-foreground/5 hover:bg-foreground/7"
+            // Unified selection states: same color family, graduated intensity
+            (isSelected || isInMultiSelect)
+              ? "bg-foreground/3"
               : "hover:bg-foreground/2"
           )}
+          // Handle all click logic in onMouseDown for proper modifier key handling
           onMouseDown={handleClick}
           onKeyDown={(e) => {
             itemProps.onKeyDown(e)
@@ -591,10 +668,11 @@ function SessionItem({
                       </StyledDropdownMenuItem>
                       <StyledDropdownMenuItem onClick={async () => {
                         const result = await window.electronAPI.sessionCommand(item.id, { type: 'updateShare' })
-                        if (result?.success) {
+                        if (result && 'success' in result && result.success) {
                           toast.success('Share updated')
                         } else {
-                          toast.error('Failed to update share', { description: result?.error })
+                          const errorMsg = result && 'error' in result ? result.error : undefined
+                          toast.error('Failed to update share', { description: errorMsg })
                         }
                       }}>
                         <RefreshCw />
@@ -603,10 +681,11 @@ function SessionItem({
                       <StyledDropdownMenuSeparator />
                       <StyledDropdownMenuItem onClick={async () => {
                         const result = await window.electronAPI.sessionCommand(item.id, { type: 'revokeShare' })
-                        if (result?.success) {
+                        if (result && 'success' in result && result.success) {
                           toast.success('Sharing stopped')
                         } else {
-                          toast.error('Failed to stop sharing', { description: result?.error })
+                          const errorMsg = result && 'error' in result ? result.error : undefined
+                          toast.error('Failed to stop sharing', { description: errorMsg })
                         }
                       }} variant="destructive">
                         <Link2Off />
@@ -622,7 +701,7 @@ function SessionItem({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="shrink-0 text-[11px] text-foreground/40 whitespace-nowrap cursor-default">
-                      {formatDistanceToNowStrict(new Date(item.lastMessageAt), { locale: shortTimeLocale as Locale, roundingMethod: 'floor' })}
+                      {formatDistanceToNowStrict(new Date(item.lastMessageAt), { locale: shortTimeLocale as Locale })}
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" sideOffset={4}>
@@ -645,7 +724,7 @@ function SessionItem({
                   : "bg-yellow-300/10 border border-yellow-600/20 text-yellow-800"
               )}
               style={{ boxShadow: isSelected ? '0 1px 2px 0 rgba(234, 179, 8, 0.3)' : '0 1px 2px 0 rgba(133, 77, 14, 0.15)' }}
-              title="Matches found (⌘G next, ⌘⇧G prev)"
+              title={`Matches found (${nextMatchHotkey} next, ${prevMatchHotkey} prev)`}
             >
               {chatMatchCount}
             </span>
@@ -674,6 +753,7 @@ function SessionItem({
                     sessionId={item.id}
                     sessionName={getSessionTitle(item)}
                     isFlagged={item.isFlagged ?? false}
+                    isArchived={item.isArchived ?? false}
                     sharedUrl={item.sharedUrl}
                     hasMessages={hasMessages(item)}
                     hasUnreadMessages={hasUnreadMessages(item)}
@@ -685,6 +765,8 @@ function SessionItem({
                     onRename={() => onRenameClick(item.id, getSessionTitle(item))}
                     onFlag={() => onFlag?.(item.id)}
                     onUnflag={() => onUnflag?.(item.id)}
+                    onArchive={() => onArchive?.(item.id)}
+                    onUnarchive={() => onUnarchive?.(item.id)}
                     onMarkUnread={() => onMarkUnread(item.id)}
                     onTodoStateChange={(state) => onTodoStateChange(item.id, state)}
                     onOpenInNewWindow={onOpenInNewWindow}
@@ -705,6 +787,7 @@ function SessionItem({
               sessionId={item.id}
               sessionName={getSessionTitle(item)}
               isFlagged={item.isFlagged ?? false}
+              isArchived={item.isArchived ?? false}
               sharedUrl={item.sharedUrl}
               hasMessages={hasMessages(item)}
               hasUnreadMessages={hasUnreadMessages(item)}
@@ -716,6 +799,8 @@ function SessionItem({
               onRename={() => onRenameClick(item.id, getSessionTitle(item))}
               onFlag={() => onFlag?.(item.id)}
               onUnflag={() => onUnflag?.(item.id)}
+              onArchive={() => onArchive?.(item.id)}
+              onUnarchive={() => onUnarchive?.(item.id)}
               onMarkUnread={() => onMarkUnread(item.id)}
               onTodoStateChange={(state) => onTodoStateChange(item.id, state)}
               onOpenInNewWindow={onOpenInNewWindow}
@@ -750,6 +835,8 @@ interface SessionListProps {
   onDelete: (sessionId: string, skipConfirmation?: boolean) => Promise<boolean>
   onFlag?: (sessionId: string) => void
   onUnflag?: (sessionId: string) => void
+  onArchive?: (sessionId: string) => void
+  onUnarchive?: (sessionId: string) => void
   onMarkUnread: (sessionId: string) => void
   onTodoStateChange: (sessionId: string, state: TodoStateId) => void
   onRename: (sessionId: string, name: string) => void
@@ -759,8 +846,8 @@ interface SessionListProps {
   onSessionSelect?: (session: SessionMeta) => void
   /** Called when user wants to open a session in a new window */
   onOpenInNewWindow?: (session: SessionMeta) => void
-  /** Called to navigate to a specific view (e.g., 'allChats', 'flagged') */
-  onNavigateToView?: (view: 'allChats' | 'flagged') => void
+  /** Called to navigate to a specific view (e.g., 'allSessions', 'flagged') */
+  onNavigateToView?: (view: 'allSessions' | 'flagged') => void
   /** Unified session options per session (real-time state) */
   sessionOptions?: Map<string, import('../../hooks/useSessionOptions').SessionOptions>
   /** Whether search mode is active */
@@ -781,7 +868,7 @@ interface SessionListProps {
   onLabelsChange?: (sessionId: string, labels: string[]) => void
   /** Workspace ID for content search (optional - if not provided, content search is disabled) */
   workspaceId?: string
-  /** Secondary status filter (status chips in "All Chats" view) - for search result grouping */
+  /** Secondary status filter (status chips in "All Sessions" view) - for search result grouping */
   statusFilter?: Map<string, FilterMode>
   /** Secondary label filter (label chips) - for search result grouping */
   labelFilterMap?: Map<string, FilterMode>
@@ -795,16 +882,17 @@ export type { TodoStateId }
  *
  * Keyboard shortcuts:
  * - Arrow Up/Down: Navigate and select sessions (immediate selection)
+ * - Arrow Left/Right: Navigate between zones
  * - Enter: Focus chat input
- * - Delete/Backspace: Delete session
- * - C: Mark complete/incomplete
- * - R: Rename session
+ * - Home/End: Jump to first/last session
  */
 export function SessionList({
   items,
   onDelete,
   onFlag,
   onUnflag,
+  onArchive,
+  onUnarchive,
   onMarkUnread,
   onTodoStateChange,
   onRename,
@@ -825,9 +913,19 @@ export function SessionList({
   statusFilter,
   labelFilterMap,
 }: SessionListProps) {
-  const [session] = useSession()
-  const { navigate } = useNavigation()
+  const {
+    state: selectionState,
+    select: selectSession,
+    toggle: toggleSession,
+    selectRange,
+    selectAll: selectAllSessions,
+    clearMultiSelect,
+    isMultiSelectActive,
+    isSelected: isSessionSelected,
+  } = useSessionSelection()
+  const { navigate, navigateToSession } = useNavigation()
   const navState = useNavigationState()
+  const { showEscapeOverlay } = useEscapeInterrupt()
 
   // Pre-flatten label tree once for efficient ID lookups in each SessionItem
   const flatLabels = useMemo(() => flattenLabels(labels), [labels])
@@ -836,7 +934,7 @@ export function SessionList({
   const visibleItems = useMemo(() => items.filter(item => !item.hidden), [items])
 
   // Get current filter from navigation state (for preserving context in tab routes)
-  const currentFilter = isChatsNavigation(navState) ? navState.filter : undefined
+  const currentFilter = isSessionsNavigation(navState) ? navState.filter : undefined
 
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
@@ -969,7 +1067,7 @@ export function SessionList({
   const { matchingFilterItems, otherResultItems, exceededSearchLimit } = useMemo(() => {
     // Check if ANY filtering is active (primary OR secondary)
     const hasActiveFilters =
-      (currentFilter && currentFilter.kind !== 'allChats') ||
+      (currentFilter && currentFilter.kind !== 'allSessions') ||
       (statusFilter && statusFilter.size > 0) ||
       (labelFilterMap && labelFilterMap.size > 0)
 
@@ -1079,44 +1177,75 @@ export function SessionList({
   }, [flatItems])
 
   // Find initial index based on selected session
-  const selectedIndex = flatItems.findIndex(item => item.id === session.selected)
+  const selectedIndex = flatItems.findIndex(item => item.id === selectionState.selected)
 
   // Focus zone management
   const { focusZone } = useFocusContext()
 
   // Register as focus zone
-  const { zoneRef, isFocused } = useFocusZone({ zoneId: 'session-list' })
+  // shouldMoveDOMFocus is true only when zone was activated via keyboard (not click or data change)
+  const { zoneRef, isFocused, shouldMoveDOMFocus } = useFocusZone({ zoneId: 'session-list' })
 
-  // Handle session selection (immediate on arrow navigation)
-  const handleActiveChange = useCallback((item: SessionMeta) => {
-    // Navigate using view routes to preserve filter context
-    if (!currentFilter || currentFilter.kind === 'allChats') {
-      navigate(routes.view.allChats(item.id))
-    } else if (currentFilter.kind === 'flagged') {
-      navigate(routes.view.flagged(item.id))
-    } else if (currentFilter.kind === 'state') {
-      navigate(routes.view.state(currentFilter.stateId, item.id))
-    }
-    // Scroll the selected item into view
+  // Handle keyboard navigation (arrow keys) - scrolls into view and selects
+  // Arrow key during multi-select exits multi-select and navigates (provides keyboard escape hatch)
+  const handleNavigate = useCallback((item: SessionMeta, index: number) => {
+    // Scroll the item into view
     requestAnimationFrame(() => {
       const element = document.querySelector(`[data-session-id="${item.id}"]`)
       element?.scrollIntoView({ block: 'nearest', behavior: 'instant' })
     })
-  }, [navigate, currentFilter])
+
+    // Exit multi-select on plain arrow navigation (provides keyboard escape hatch)
+    if (isMultiSelectActive) {
+      clearMultiSelect()
+    }
+
+    // Select the session and navigate (preserves filter context)
+    selectSession(item.id, index)
+    navigateToSession(item.id)
+  }, [isMultiSelectActive, clearMultiSelect, selectSession, navigateToSession])
+
+  // Handle click selection - selects the item and navigates to it
+  const handleSelectSession = useCallback((item: SessionMeta, index: number) => {
+    selectSession(item.id, index)
+    navigateToSession(item.id)
+  }, [selectSession, navigateToSession])
+
+  // Handle toggle select (cmd/ctrl+click)
+  const handleToggleSelect = useCallback((item: SessionMeta, index: number) => {
+    // Activate zone for keyboard shortcuts, but don't steal DOM focus from chat input
+    focusZone('session-list', { intent: 'click', moveFocus: false })
+    toggleSession(item.id, index)
+  }, [focusZone, toggleSession])
+
+  // Handle range select (shift+click or shift+arrow)
+  // No navigation - MultiSelectPanel shows automatically via isMultiSelectActive
+  const handleRangeSelect = useCallback((toIndex: number) => {
+    // Activate zone for keyboard shortcuts, but don't steal DOM focus from chat input
+    focusZone('session-list', { intent: 'click', moveFocus: false })
+    const allIds = flatItems.map(i => i.id)
+    selectRange(toIndex, allIds)
+  }, [focusZone, flatItems, selectRange])
 
   // NOTE: We intentionally do NOT auto-select sessions while typing in search.
   // Auto-selecting causes: 1) ChatDisplay to scroll, 2) focus loss from search input
-  // Selection only changes via: arrow key navigation or explicit click
+  // Selection only changes via: Enter key activation or explicit click
 
-  // Handle Enter to focus chat input
-  const handleEnter = useCallback(() => {
+  // Handle Enter/Space activation - selects the focused item and focuses chat input
+  const handleActivate = useCallback((item: SessionMeta, index: number) => {
+    // In multi-select mode, Enter just focuses chat (selection is already set)
+    // In normal mode, Enter selects the item then focuses chat
+    if (!isMultiSelectActive) {
+      selectSession(item.id, index)
+      navigateToSession(item.id)
+    }
     onFocusChatInput?.()
-  }, [onFocusChatInput])
+  }, [isMultiSelectActive, selectSession, navigateToSession, onFocusChatInput])
 
   const handleFlagWithToast = useCallback((sessionId: string) => {
     if (!onFlag) return
     onFlag(sessionId)
-    toast('Conversation flagged', {
+    toast('Session flagged', {
       description: 'Added to your flagged items',
       action: onUnflag ? {
         label: 'Undo',
@@ -1137,19 +1266,79 @@ export function SessionList({
     })
   }, [onFlag, onUnflag])
 
+  const handleArchiveWithToast = useCallback((sessionId: string) => {
+    if (!onArchive) return
+    onArchive(sessionId)
+    toast('Session archived', {
+      description: 'Moved to archive',
+      action: onUnarchive ? {
+        label: 'Undo',
+        onClick: () => onUnarchive(sessionId),
+      } : undefined,
+    })
+  }, [onArchive, onUnarchive])
+
+  const handleUnarchiveWithToast = useCallback((sessionId: string) => {
+    if (!onUnarchive) return
+    onUnarchive(sessionId)
+    toast('Session restored', {
+      description: 'Moved from archive',
+      action: onArchive ? {
+        label: 'Undo',
+        onClick: () => onArchive(sessionId),
+      } : undefined,
+    })
+  }, [onArchive, onUnarchive])
+
   const handleDeleteWithToast = useCallback(async (sessionId: string): Promise<boolean> => {
     // Confirmation dialog is shown by handleDeleteSession in App.tsx
     // We await so toast only shows after successful deletion (if user confirmed)
     const deleted = await onDelete(sessionId)
     if (deleted) {
-      toast('Conversation deleted')
+      toast('Session deleted')
     }
     return deleted
   }, [onDelete])
 
-  // Roving tabindex for keyboard navigation
-  // During search: enabled but moveFocus=false so focus stays on search input
-  const rovingEnabled = isFocused || (searchActive && isSearchInputFocused)
+  // Keyboard eligibility: determines when SessionList handles global keyboard shortcuts.
+  // Two modes are supported:
+  // 1. Zone-focused: User explicitly focused session-list zone (Cmd+2, Tab, or click)
+  // 2. Search mode: Search input is focused (special case - we want arrow navigation
+  //    but Cmd+A should NOT select all sessions since user may want to select input text)
+  // This is intentionally NOT unified into the focus zone system because search input
+  // requires partial keyboard support (arrows yes, Cmd+A no).
+  const isKeyboardEligible = isFocused || (searchActive && isSearchInputFocused)
+
+  // Helper: check if focus is within the session list container
+  const isFocusWithinZone = () => zoneRef.current?.contains(document.activeElement) ?? false
+
+  // Cmd+A to select all sessions
+  // Uses containment check: fires when focus is anywhere within the zone container
+  useAction('sessionList.selectAll', () => {
+    const allIds = flatItems.map(item => item.id)
+    selectAllSessions(allIds)
+  }, {
+    enabled: isFocusWithinZone,
+  }, [flatItems, selectAllSessions])
+
+  // Escape to clear multi-select (globally - works from any zone)
+  // inputSafe flag in action definition allows this to fire from INPUT/TEXTAREA
+  // Defers to interrupt flow when escape overlay is showing (processing interrupt takes priority)
+  useAction('sessionList.clearSelection', () => {
+    // Get the session that will remain selected after clearing
+    const selectedId = selectionState.selected
+    clearMultiSelect()
+    // Navigate to sync sidebar and main content
+    if (selectedId) {
+      navigateToSession(selectedId)
+    }
+  }, {
+    enabled: () => isMultiSelectActive && !showEscapeOverlay,
+  }, [isMultiSelectActive, showEscapeOverlay, clearMultiSelect, selectionState.selected, navigateToSession])
+
+  // Roving tabindex enabled when keyboard-eligible (see isKeyboardEligible comment above)
+  // moveFocus=false during search so DOM focus stays on input while activeIndex changes
+  const rovingEnabled = isKeyboardEligible
 
   const {
     activeIndex,
@@ -1162,38 +1351,41 @@ export function SessionList({
     getId: (item, _index) => item.id,
     orientation: 'vertical',
     wrap: true,
-    onActiveChange: handleActiveChange,
-    onEnter: handleEnter,
+    onNavigate: handleNavigate, // Arrow keys scroll into view
+    onActivate: handleActivate, // Enter/Space selects and focuses chat
     initialIndex: selectedIndex >= 0 ? selectedIndex : 0,
     enabled: rovingEnabled,
     moveFocus: !searchActive, // Keep focus on search input during search
+    onExtendSelection: handleRangeSelect, // Shift+Arrow extends selection
   })
 
   // Sync activeIndex when selection changes externally
   useEffect(() => {
-    const newIndex = flatItems.findIndex(item => item.id === session.selected)
+    const newIndex = flatItems.findIndex(item => item.id === selectionState.selected)
     if (newIndex >= 0 && newIndex !== activeIndex) {
       setActiveIndex(newIndex)
     }
-  }, [session.selected, flatItems, activeIndex, setActiveIndex])
+  }, [selectionState.selected, flatItems, activeIndex, setActiveIndex])
 
-  // Focus active item when zone gains focus (but not while search input is active)
+  // Focus active item when zone gains focus via explicit keyboard navigation
+  // shouldMoveDOMFocus is only true for keyboard intents (Cmd+2, Tab, Arrow keys)
+  // This prevents data changes (new messages, reordering) from stealing focus
   useEffect(() => {
-    if (isFocused && flatItems.length > 0 && !searchActive) {
+    if (shouldMoveDOMFocus && flatItems.length > 0 && !searchActive) {
       focusActiveItem()
     }
-  }, [isFocused, focusActiveItem, flatItems.length, searchActive])
+  }, [shouldMoveDOMFocus, focusActiveItem, flatItems.length, searchActive])
 
   // Arrow key shortcuts for zone navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent, _item: SessionMeta) => {
     if (e.key === 'ArrowLeft') {
       e.preventDefault()
-      focusZone('sidebar')
+      focusZone('sidebar', { intent: 'keyboard' })
       return
     }
     if (e.key === 'ArrowRight') {
       e.preventDefault()
-      focusZone('chat')
+      focusZone('chat', { intent: 'keyboard' })
       return
     }
   }, [focusZone])
@@ -1244,15 +1436,32 @@ export function SessionList({
 
   // Empty state - render outside ScrollArea for proper vertical centering
   if (flatItems.length === 0 && !searchActive) {
+    // Special empty state for archived view
+    if (currentFilter?.kind === 'archived') {
+      return (
+        <Empty className="h-full">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Archive />
+            </EmptyMedia>
+            <EmptyTitle>No archived sessions</EmptyTitle>
+            <EmptyDescription>
+              Sessions you archive will appear here. Archive sessions to keep your list tidy while preserving conversations.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )
+    }
+
     return (
       <Empty className="h-full">
         <EmptyHeader>
           <EmptyMedia variant="icon">
             <Inbox />
           </EmptyMedia>
-          <EmptyTitle>No conversations yet</EmptyTitle>
+          <EmptyTitle>No sessions yet</EmptyTitle>
           <EmptyDescription>
-            Conversations with your agent appear here. Start one to get going.
+            Sessions with your agent appear here. Start one to get going.
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
@@ -1262,11 +1471,11 @@ export function SessionList({
               const params: { status?: string; label?: string } = {}
               if (currentFilter?.kind === 'state') params.status = currentFilter.stateId
               else if (currentFilter?.kind === 'label') params.label = currentFilter.labelId
-              navigate(routes.action.newChat(Object.keys(params).length > 0 ? params : undefined))
+              navigate(routes.action.newSession(Object.keys(params).length > 0 ? params : undefined))
             }}
             className="inline-flex items-center h-7 px-3 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors"
           >
-            New Conversation
+            New Session
           </button>
         </EmptyContent>
       </Empty>
@@ -1302,7 +1511,7 @@ export function SessionList({
           {/* No results message when in search mode */}
           {isSearchMode && flatItems.length === 0 && !isSearchingContent && (
             <div className="flex flex-col items-center justify-center py-12 px-4">
-              <p className="text-sm text-muted-foreground">No conversations found</p>
+              <p className="text-sm text-muted-foreground">No sessions found</p>
               <p className="text-xs text-muted-foreground/60 mt-0.5">
                 Searched titles and message content
               </p>
@@ -1338,7 +1547,7 @@ export function SessionList({
                         item={item}
                         index={flatIndex}
                         itemProps={itemProps}
-                        isSelected={session.selected === item.id}
+                        isSelected={selectionState.selected === item.id}
                         isLast={flatIndex === flatItems.length - 1}
                         isFirstInGroup={index === 0}
                         onKeyDown={handleKeyDown}
@@ -1346,18 +1555,11 @@ export function SessionList({
                         onTodoStateChange={onTodoStateChange}
                         onFlag={onFlag ? handleFlagWithToast : undefined}
                         onUnflag={onUnflag ? handleUnflagWithToast : undefined}
+                        onArchive={onArchive ? handleArchiveWithToast : undefined}
+                        onUnarchive={onUnarchive ? handleUnarchiveWithToast : undefined}
                         onMarkUnread={onMarkUnread}
                         onDelete={handleDeleteWithToast}
-                        onSelect={() => {
-                          if (!currentFilter || currentFilter.kind === 'allChats') {
-                            navigate(routes.view.allChats(item.id))
-                          } else if (currentFilter.kind === 'flagged') {
-                            navigate(routes.view.flagged(item.id))
-                          } else if (currentFilter.kind === 'state') {
-                            navigate(routes.view.state(currentFilter.stateId, item.id))
-                          }
-                          onSessionSelect?.(item)
-                        }}
+                        onSelect={() => handleSelectSession(item, flatIndex)}
                         onOpenInNewWindow={() => onOpenInNewWindow?.(item)}
                         permissionMode={sessionOptions?.get(item.id)?.permissionMode}
                         searchQuery={highlightQuery}
@@ -1366,6 +1568,11 @@ export function SessionList({
                         labels={labels}
                         onLabelsChange={onLabelsChange}
                         chatMatchCount={isSearchMode ? contentSearchResults.get(item.id)?.matchCount : undefined}
+                        isMultiSelectActive={isMultiSelectActive}
+                        isInMultiSelect={isSessionSelected(item.id)}
+                        onToggleSelect={() => handleToggleSelect(item, flatIndex)}
+                        onRangeSelect={() => handleRangeSelect(flatIndex)}
+                        onFocusZone={() => focusZone('session-list', { intent: 'click', moveFocus: false })}
                       />
                     )
                   })}
@@ -1385,7 +1592,7 @@ export function SessionList({
                         item={item}
                         index={flatIndex}
                         itemProps={itemProps}
-                        isSelected={session.selected === item.id}
+                        isSelected={selectionState.selected === item.id}
                         isLast={flatIndex === flatItems.length - 1}
                         isFirstInGroup={index === 0}
                         onKeyDown={handleKeyDown}
@@ -1393,18 +1600,11 @@ export function SessionList({
                         onTodoStateChange={onTodoStateChange}
                         onFlag={onFlag ? handleFlagWithToast : undefined}
                         onUnflag={onUnflag ? handleUnflagWithToast : undefined}
+                        onArchive={onArchive ? handleArchiveWithToast : undefined}
+                        onUnarchive={onUnarchive ? handleUnarchiveWithToast : undefined}
                         onMarkUnread={onMarkUnread}
                         onDelete={handleDeleteWithToast}
-                        onSelect={() => {
-                          if (!currentFilter || currentFilter.kind === 'allChats') {
-                            navigate(routes.view.allChats(item.id))
-                          } else if (currentFilter.kind === 'flagged') {
-                            navigate(routes.view.flagged(item.id))
-                          } else if (currentFilter.kind === 'state') {
-                            navigate(routes.view.state(currentFilter.stateId, item.id))
-                          }
-                          onSessionSelect?.(item)
-                        }}
+                        onSelect={() => handleSelectSession(item, flatIndex)}
                         onOpenInNewWindow={() => onOpenInNewWindow?.(item)}
                         permissionMode={sessionOptions?.get(item.id)?.permissionMode}
                         searchQuery={highlightQuery}
@@ -1413,6 +1613,11 @@ export function SessionList({
                         labels={labels}
                         onLabelsChange={onLabelsChange}
                         chatMatchCount={isSearchMode ? contentSearchResults.get(item.id)?.matchCount : undefined}
+                        isMultiSelectActive={isMultiSelectActive}
+                        isInMultiSelect={isSessionSelected(item.id)}
+                        onToggleSelect={() => handleToggleSelect(item, flatIndex)}
+                        onRangeSelect={() => handleRangeSelect(flatIndex)}
+                        onFocusZone={() => focusZone('session-list', { intent: 'click', moveFocus: false })}
                       />
                     )
                   })}
@@ -1433,7 +1638,7 @@ export function SessionList({
                       item={item}
                       index={flatIndex}
                       itemProps={itemProps}
-                      isSelected={session.selected === item.id}
+                      isSelected={selectionState.selected === item.id}
                       isLast={flatIndex === flatItems.length - 1}
                       isFirstInGroup={indexInGroup === 0}
                       onKeyDown={handleKeyDown}
@@ -1441,18 +1646,11 @@ export function SessionList({
                       onTodoStateChange={onTodoStateChange}
                       onFlag={onFlag ? handleFlagWithToast : undefined}
                       onUnflag={onUnflag ? handleUnflagWithToast : undefined}
+                      onArchive={onArchive ? handleArchiveWithToast : undefined}
+                      onUnarchive={onUnarchive ? handleUnarchiveWithToast : undefined}
                       onMarkUnread={onMarkUnread}
                       onDelete={handleDeleteWithToast}
-                      onSelect={() => {
-                        if (!currentFilter || currentFilter.kind === 'allChats') {
-                          navigate(routes.view.allChats(item.id))
-                        } else if (currentFilter.kind === 'flagged') {
-                          navigate(routes.view.flagged(item.id))
-                        } else if (currentFilter.kind === 'state') {
-                          navigate(routes.view.state(currentFilter.stateId, item.id))
-                        }
-                        onSessionSelect?.(item)
-                      }}
+                      onSelect={() => handleSelectSession(item, flatIndex)}
                       onOpenInNewWindow={() => onOpenInNewWindow?.(item)}
                       permissionMode={sessionOptions?.get(item.id)?.permissionMode}
                       searchQuery={searchQuery}
@@ -1461,6 +1659,11 @@ export function SessionList({
                       labels={labels}
                       onLabelsChange={onLabelsChange}
                       chatMatchCount={contentSearchResults.get(item.id)?.matchCount}
+                      isMultiSelectActive={isMultiSelectActive}
+                      isInMultiSelect={isSessionSelected(item.id)}
+                      onToggleSelect={() => handleToggleSelect(item, flatIndex)}
+                      onRangeSelect={() => handleRangeSelect(flatIndex)}
+                      onFocusZone={() => focusZone('session-list', { intent: 'click', moveFocus: false })}
                     />
                   )
                 })}
@@ -1480,11 +1683,11 @@ export function SessionList({
       <RenameDialog
         open={renameDialogOpen}
         onOpenChange={setRenameDialogOpen}
-        title="Rename conversation"
+        title="Rename Session"
         value={renameName}
         onValueChange={setRenameName}
         onSubmit={handleRenameSubmit}
-        placeholder="Enter a name..."
+        placeholder="Enter session name..."
       />
     </div>
   )

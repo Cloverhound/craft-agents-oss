@@ -14,9 +14,11 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { debug } from '../utils/debug.ts';
+import { readJsonFileSync, safeJsonParse } from '../utils/files.ts';
 import { CONFIG_DIR } from '../config/paths.ts';
 import { getBundledAssetsDir } from '../utils/paths.ts';
 import { getSourcePath } from '../sources/storage.ts';
+import { isValidPermissionsFile } from '../config/validators.ts';
 import {
   SAFE_MODE_CONFIG,
   PermissionsConfigSchema,
@@ -46,10 +48,14 @@ export function getAppPermissionsDir(): string {
 
 /**
  * Sync bundled default permissions to disk on launch.
- * Always overwrites to ensure defaults stay current with the running app version
- * (e.g., new bash/MCP patterns added in a new release).
- * User customizations live in separate files (workspace/source permissions.json)
- * and are never touched by this function.
+ * Handles migrations when bundled version is newer:
+ * - If file doesn't exist → copy from bundle
+ * - If file exists but is invalid/corrupt → copy from bundle (auto-heal)
+ * - If file exists and bundled is newer → merge new patterns, update version
+ * - If file exists and same/older version → no-op (preserve user changes)
+ *
+ * User customizations in workspace/source permissions.json files
+ * are never touched by this function.
  */
 export function ensureDefaultPermissions(): void {
   // Skip if already initialized this session (prevents re-init on hot reload)
@@ -71,20 +77,90 @@ export function ensureDefaultPermissions(): void {
     return;
   }
 
-  // Always write bundled default.json to disk on launch.
-  // This ensures new permission rules from app updates are available immediately.
-  // User customizations go in workspace/source permissions.json files (separate layer).
   const destPath = join(permissionsDir, 'default.json');
   const srcPath = join(bundledPermissionsDir, 'default.json');
-  if (existsSync(srcPath)) {
+
+  if (!existsSync(srcPath)) {
+    return;
+  }
+
+  // New install or corrupt file - copy fresh from bundle
+  if (!existsSync(destPath) || !isValidPermissionsFile(destPath)) {
     try {
       const content = readFileSync(srcPath, 'utf-8');
       writeFileSync(destPath, content, 'utf-8');
-      debug('[Permissions] Synced bundled default.json to', destPath);
+      debug('[Permissions] Installed default.json');
     } catch (error) {
-      debug('[Permissions] Error syncing bundled default.json:', error);
+      debug('[Permissions] Error installing default.json:', error);
     }
+    return;
   }
+
+  // Check if migration needed (bundled version > installed version)
+  try {
+    const installedContent = readFileSync(destPath, 'utf-8');
+    const bundledContent = readFileSync(srcPath, 'utf-8');
+
+    const installed = safeJsonParse(installedContent) as PermissionsConfigFile;
+    const bundled = safeJsonParse(bundledContent) as PermissionsConfigFile;
+
+    const installedVersion = installed.version || '2000-01-01';
+    const bundledVersion = bundled.version || '2000-01-01';
+
+    if (bundledVersion > installedVersion) {
+      const merged = migratePermissions(installed, bundled);
+      writeFileSync(destPath, JSON.stringify(merged, null, 2), 'utf-8');
+      debug('[Permissions] Migrated from', installedVersion, 'to', bundledVersion);
+    } else {
+      debug('[Permissions] Already up to date:', installedVersion);
+    }
+  } catch (error) {
+    debug('[Permissions] Migration error:', error);
+  }
+}
+
+/**
+ * Merge new patterns from bundled config into existing installed config.
+ * Preserves user customizations, adds new patterns, updates version.
+ */
+function migratePermissions(
+  installed: PermissionsConfigFile,
+  bundled: PermissionsConfigFile
+): PermissionsConfigFile {
+  // Get existing pattern strings for deduplication
+  const getPatternString = (p: string | { pattern: string }): string =>
+    typeof p === 'string' ? p : p.pattern;
+
+  const existingBashPatterns = new Set(
+    (installed.allowedBashPatterns || []).map(getPatternString)
+  );
+  const existingMcpPatterns = new Set(
+    (installed.allowedMcpPatterns || []).map(getPatternString)
+  );
+
+  // Find new patterns not already in installed
+  const newBashPatterns = (bundled.allowedBashPatterns || []).filter(
+    p => !existingBashPatterns.has(getPatternString(p))
+  );
+  const newMcpPatterns = (bundled.allowedMcpPatterns || []).filter(
+    p => !existingMcpPatterns.has(getPatternString(p))
+  );
+
+  debug('[Permissions] Adding', newBashPatterns.length, 'new bash patterns');
+  debug('[Permissions] Adding', newMcpPatterns.length, 'new MCP patterns');
+
+  return {
+    ...installed,
+    version: bundled.version,
+    allowedBashPatterns: [
+      ...(installed.allowedBashPatterns || []),
+      ...newBashPatterns,
+    ],
+    allowedMcpPatterns: [
+      ...(installed.allowedMcpPatterns || []),
+      ...newMcpPatterns,
+    ],
+  };
 }
 
 /**
@@ -198,7 +274,7 @@ export function parsePermissionsJson(content: string): PermissionsCustomConfig {
   };
 
   try {
-    const json = JSON.parse(content);
+    const json = safeJsonParse(content);
     const result = PermissionsConfigSchema.safeParse(json);
 
     if (!result.success) {

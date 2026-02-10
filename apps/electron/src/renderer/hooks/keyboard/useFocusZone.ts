@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from "react"
-import { useFocusContext, type FocusZoneId } from "@/context/FocusContext"
+import { useFocusContext, type FocusZoneId, type FocusIntent, type FocusZoneOptions } from "@/context/FocusContext"
 
 interface UseFocusZoneOptions {
   /** Unique zone identifier */
@@ -17,8 +17,12 @@ interface UseFocusZoneReturn {
   zoneRef: React.RefObject<HTMLDivElement>
   /** Whether this zone currently has focus */
   isFocused: boolean
+  /** Whether DOM focus should move to this zone (true only for explicit keyboard navigation) */
+  shouldMoveDOMFocus: boolean
+  /** The intent behind the current focus (keyboard, click, programmatic) - null if not this zone */
+  intent: FocusIntent | null
   /** Programmatically focus this zone */
-  focus: () => void
+  focus: (options?: FocusZoneOptions) => void
 }
 
 /**
@@ -32,9 +36,13 @@ export function useFocusZone({
   focusFirst,
 }: UseFocusZoneOptions): UseFocusZoneReturn {
   const zoneRef = useRef<HTMLDivElement>(null)
-  const { registerZone, unregisterZone, focusZone, isZoneFocused } = useFocusContext()
+  const { registerZone, unregisterZone, focusZone, isZoneFocused, focusState } = useFocusContext()
 
   const isFocused = isZoneFocused(zoneId)
+  // shouldMoveDOMFocus is true only when this zone is focused AND the intent requires DOM focus movement
+  const shouldMoveDOMFocus = focusState.zone === zoneId && focusState.shouldMoveDOMFocus
+  // Intent is only relevant if this zone is focused
+  const intent = focusState.zone === zoneId ? focusState.intent : null
 
   // Track previous focus state for callbacks
   const wasFocusedRef = useRef(isFocused)
@@ -62,13 +70,15 @@ export function useFocusZone({
     wasFocusedRef.current = isFocused
   }, [isFocused, onFocus, onBlur])
 
-  const focus = useCallback(() => {
-    focusZone(zoneId)
+  const focus = useCallback((options?: FocusZoneOptions) => {
+    focusZone(zoneId, options)
   }, [focusZone, zoneId])
 
   return {
     zoneRef,
     isFocused,
+    shouldMoveDOMFocus,
+    intent,
     focus,
   }
 }

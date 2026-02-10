@@ -182,6 +182,8 @@ export interface CodeOverlayData {
   totalLines?: number
   numLines?: number
   error?: string
+  /** Original shell command (for Codex reads) - displayed in overlay */
+  command?: string
 }
 
 export interface TerminalOverlayData {
@@ -251,6 +253,8 @@ export function extractOverlayData(activity: ActivityItem): OverlayData | null {
       totalLines: parsed.totalLines,
       numLines: parsed.numLines,
       error: activity.error,
+      // Pass through command if present (Codex reads via shell commands)
+      command: input?._command as string | undefined,
     }
   }
 

@@ -26,9 +26,6 @@ export interface SkillMetadata {
   icon?: string;
 }
 
-/** Source of a loaded skill */
-export type SkillSource = 'global' | 'workspace' | 'project';
-
 /**
  * A loaded skill with parsed content
  */
@@ -43,6 +40,4 @@ export interface LoadedSkill {
   iconPath?: string;
   /** Absolute path to skill directory */
   path: string;
-  /** Where this skill was loaded from */
-  source: SkillSource;
 }

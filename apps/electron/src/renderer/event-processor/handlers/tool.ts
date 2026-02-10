@@ -47,7 +47,7 @@ export function handleToolStart(
     id: generateMessageId(),
     role: 'tool',
     content: '',
-    timestamp: Date.now(),
+    timestamp: event.timestamp ?? Date.now(),
     toolUseId: event.toolUseId,
     toolName: event.toolName,
     toolInput: event.toolInput,

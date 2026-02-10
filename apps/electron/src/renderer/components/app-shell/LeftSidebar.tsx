@@ -21,7 +21,7 @@ export interface SidebarContextMenuConfig {
   statusId?: string
   /** Label ID — when set, this is an individual label (enables Delete Label) */
   labelId?: string
-  /** Handler for "Configure Statuses" action - for allChats/status/flagged types */
+  /** Handler for "Configure Statuses" action - for allSessions/status/flagged types */
   onConfigureStatuses?: () => void
   /** Handler for "Configure Labels" action - receives labelId when triggered from a specific label */
   onConfigureLabels?: (labelId?: string) => void
@@ -53,7 +53,7 @@ export interface SortableConfig {
 }
 
 export interface LinkItem {
-  id: string            // Unique ID for navigation (e.g., 'nav:allChats')
+  id: string            // Unique ID for navigation (e.g., 'nav:allSessions')
   title: string
   label?: string        // Optional badge (e.g., count)
   icon: LucideIcon | React.ReactNode  // LucideIcon or custom React element

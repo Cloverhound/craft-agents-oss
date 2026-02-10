@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Command as CommandPrimitive } from 'cmdk'
+import { Archive, ArchiveRestore } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   type TodoStateId,
@@ -49,6 +50,12 @@ export interface TodoStateMenuProps {
   states?: TodoState[]
   activeState: TodoStateId
   onSelect: (stateId: TodoStateId) => void
+  /** Whether the session is currently archived */
+  isArchived?: boolean
+  /** Archive action - shows Archive item at bottom when provided and not archived */
+  onArchive?: () => void
+  /** Unarchive action - shows Unarchive item at bottom when provided and archived */
+  onUnarchive?: () => void
   className?: string
 }
 
@@ -56,6 +63,9 @@ export function TodoStateMenu({
   states = [],
   activeState,
   onSelect,
+  isArchived,
+  onArchive,
+  onUnarchive,
   className,
 }: TodoStateMenuProps) {
   const [filter, setFilter] = React.useState('')
@@ -107,6 +117,26 @@ export function TodoStateMenu({
             </CommandPrimitive.Item>
           )
         })}
+        {/* Archive/Unarchive item - only shown when handler provided and no filter active */}
+        {!filter && (isArchived ? onUnarchive : onArchive) && (
+          <>
+            <div className="border-t border-border/50 mx-2 my-1" />
+            <CommandPrimitive.Item
+              value={isArchived ? "unarchive" : "archive"}
+              onSelect={() => isArchived ? onUnarchive?.() : onArchive?.()}
+              className={cn(
+                MENU_ITEM_STYLE,
+                'outline-none',
+                'data-[selected=true]:bg-foreground/3'
+              )}
+            >
+              <span className="shrink-0 flex items-center opacity-60">
+                {isArchived ? <ArchiveRestore className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
+              </span>
+              <div className="flex-1 min-w-0">{isArchived ? 'Unarchive' : 'Archive'}</div>
+            </CommandPrimitive.Item>
+          </>
+        )}
       </CommandPrimitive.List>
     </CommandPrimitive>
   )

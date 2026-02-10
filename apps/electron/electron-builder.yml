@@ -16,28 +16,22 @@ files:
   - "!dist/renderer/src/**"
   - "!**/*.map"
   - package.json
-  # Bundled assets loaded at runtime via getBundledAssetsDir()
-  - dist/assets/docs/**/*
-  - dist/assets/tool-icons/**/*
-  - dist/assets/themes/**/*
-  - dist/assets/permissions/**/*
-  - dist/assets/config-defaults.json
+  # Include bundled MCP servers (bridge + session) for Codex sessions
+  - resources/bridge-mcp-server/**/*
+  - resources/session-mcp-server/**/*
+  # Note: Bundled assets (docs, themes, permissions, tool-icons) are in resources/
+  # and copied to dist/resources/ by build:copy. They're included via dist/**/* above.
+  # Include SDK for subprocess execution
+  - node_modules/@anthropic-ai/claude-agent-sdk/**/*
   # Include network interceptor for API error capture and MCP schema injection
   - packages/shared/src/network-interceptor.ts
   # Include bundled Bun runtime (platform-specific, set by build script)
   - vendor/bun/**/*
-  # Exclude everything from node_modules (will use extraResources for SDK)
+  # Include bundled Codex binary (platform-specific, downloaded by build script)
+  - vendor/codex/**/*
+  # Exclude everything else from node_modules
   - "!node_modules/**/*"
-
-# Include SDK as extraResources to bypass node_modules auto-exclusion
-# Since electron-builder v20.15.2, directories named "node_modules" are automatically excluded
-# Using extraResources with explicit from/to paths works around this limitation
-# See: https://github.com/electron-userland/electron-builder/issues/3104
-extraResources:
-  - from: node_modules/@anthropic-ai/claude-agent-sdk
-    to: app/node_modules/@anthropic-ai/claude-agent-sdk
-    filter:
-      - "**/*"
+  - node_modules/@anthropic-ai/**/*
 
 extraMetadata:
   main: dist/main.cjs
@@ -70,11 +64,13 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  # Exclude ripgrep binaries for other platforms
+  # Exclude binaries for other platforms
   files:
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-linux"
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-linux"
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-win32"
+    - "!**/vendor/codex/linux-*/**"
+    - "!**/vendor/codex/win32-*/**"
   # Use predictable naming for macOS packages (applies to zip; dmg uses its own config below)
   artifactName: "CloverhoundAI-${arch}.${ext}"
   # Code signing & notarization (disabled by default for local builds)
@@ -111,11 +107,13 @@ win:
   # Use predictable naming: CloverhoundAI-x64.exe
   artifactName: "CloverhoundAI-${arch}.${ext}"
   files:
-    # Exclude ripgrep binaries for other platforms
+    # Exclude binaries for other platforms
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-linux"
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-linux"
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-darwin"
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-darwin"
+    - "!**/vendor/codex/darwin-*/**"
+    - "!**/vendor/codex/linux-*/**"
     # WORKAROUND: Exclude bun from regular files on Windows.
     # electron-builder's npm node module collector causes EBUSY errors when copying
     # bun.exe because it scans/locks files while simultaneously trying to copy them.
@@ -143,9 +141,11 @@ linux:
       arch:
         - x64
   artifactName: "CloverhoundAI-${arch}.${ext}"
-  # Exclude ripgrep binaries for other platforms
+  # Exclude binaries for other platforms
   files:
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-darwin"
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-darwin"
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-win32"
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-linux"
+    - "!**/vendor/codex/darwin-*/**"
+    - "!**/vendor/codex/win32-*/**"

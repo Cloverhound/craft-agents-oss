@@ -2,8 +2,8 @@
  * Tests for default chat filter parsing, serialization, and route building.
  *
  * These tests verify:
- * - parseDefaultChatFilter: string → ChatFilter (with validation)
- * - serializeChatFilter: ChatFilter → string (round-trip)
+ * - parseDefaultChatFilter: string → SessionFilter (with validation)
+ * - serializeChatFilter: SessionFilter → string (round-trip)
  * - buildDefaultViewRoute: string → Route (view route from filter string)
  * - Edge cases: invalid strings, undefined, empty strings, etc.
  */
@@ -11,7 +11,7 @@ import { describe, it, expect } from 'bun:test'
 import {
   parseDefaultChatFilter,
   serializeChatFilter,
-  type ChatFilter,
+  type SessionFilter,
 } from '../types'
 import { buildDefaultViewRoute } from '../routes'
 
@@ -21,9 +21,9 @@ import { buildDefaultViewRoute } from '../routes'
 
 describe('parseDefaultChatFilter', () => {
   describe('valid filter strings', () => {
-    it('parses "allChats" to allChats filter', () => {
+    it('parses "allChats" to allSessions filter', () => {
       const result = parseDefaultChatFilter('allChats')
-      expect(result).toEqual({ kind: 'allChats' })
+      expect(result).toEqual({ kind: 'allSessions' })
     })
 
     it('parses "flagged" to flagged filter', () => {
@@ -110,8 +110,8 @@ describe('parseDefaultChatFilter', () => {
 // ============================================================
 
 describe('serializeChatFilter', () => {
-  it('serializes allChats filter', () => {
-    expect(serializeChatFilter({ kind: 'allChats' })).toBe('allChats')
+  it('serializes allSessions filter', () => {
+    expect(serializeChatFilter({ kind: 'allSessions' })).toBe('allChats')
   })
 
   it('serializes flagged filter', () => {
@@ -140,8 +140,8 @@ describe('serializeChatFilter', () => {
 // ============================================================
 
 describe('round-trip (serialize → parse)', () => {
-  const testCases: ChatFilter[] = [
-    { kind: 'allChats' },
+  const testCases: SessionFilter[] = [
+    { kind: 'allSessions' },
     { kind: 'flagged' },
     { kind: 'state', stateId: 'todo' },
     { kind: 'state', stateId: 'in-progress' },
@@ -170,12 +170,12 @@ describe('round-trip (serialize → parse)', () => {
 
 describe('buildDefaultViewRoute', () => {
   describe('without session ID', () => {
-    it('returns allChats route for undefined filter', () => {
-      expect(buildDefaultViewRoute(undefined)).toBe('allChats')
+    it('returns allSessions route for undefined filter', () => {
+      expect(buildDefaultViewRoute(undefined)).toBe('allSessions')
     })
 
-    it('returns allChats route for "allChats" filter', () => {
-      expect(buildDefaultViewRoute('allChats')).toBe('allChats')
+    it('returns allSessions route for "allChats" filter', () => {
+      expect(buildDefaultViewRoute('allChats')).toBe('allSessions')
     })
 
     it('returns flagged route for "flagged" filter', () => {
@@ -194,56 +194,56 @@ describe('buildDefaultViewRoute', () => {
       expect(buildDefaultViewRoute('view:my-view')).toBe('view/my-view')
     })
 
-    it('falls back to allChats for unknown filter format', () => {
-      expect(buildDefaultViewRoute('unknown')).toBe('allChats')
+    it('falls back to allSessions for unknown filter format', () => {
+      expect(buildDefaultViewRoute('unknown')).toBe('allSessions')
     })
 
-    it('falls back to allChats for empty string', () => {
-      expect(buildDefaultViewRoute('')).toBe('allChats')
+    it('falls back to allSessions for empty string', () => {
+      expect(buildDefaultViewRoute('')).toBe('allSessions')
     })
 
-    it('falls back to allChats for "state:" with no ID', () => {
-      expect(buildDefaultViewRoute('state:')).toBe('allChats')
+    it('falls back to allSessions for "state:" with no ID', () => {
+      expect(buildDefaultViewRoute('state:')).toBe('allSessions')
     })
 
-    it('falls back to allChats for "label:" with no ID', () => {
-      expect(buildDefaultViewRoute('label:')).toBe('allChats')
+    it('falls back to allSessions for "label:" with no ID', () => {
+      expect(buildDefaultViewRoute('label:')).toBe('allSessions')
     })
 
-    it('falls back to allChats for "view:" with no ID', () => {
-      expect(buildDefaultViewRoute('view:')).toBe('allChats')
+    it('falls back to allSessions for "view:" with no ID', () => {
+      expect(buildDefaultViewRoute('view:')).toBe('allSessions')
     })
   })
 
   describe('with session ID', () => {
     const sessionId = 'session-abc-123'
 
-    it('returns allChats/chat/{id} route for undefined filter', () => {
-      expect(buildDefaultViewRoute(undefined, sessionId)).toBe(`allChats/chat/${sessionId}`)
+    it('returns allSessions/session/{id} route for undefined filter', () => {
+      expect(buildDefaultViewRoute(undefined, sessionId)).toBe(`allSessions/session/${sessionId}`)
     })
 
-    it('returns allChats/chat/{id} route for "allChats" filter', () => {
-      expect(buildDefaultViewRoute('allChats', sessionId)).toBe(`allChats/chat/${sessionId}`)
+    it('returns allSessions/session/{id} route for "allChats" filter', () => {
+      expect(buildDefaultViewRoute('allChats', sessionId)).toBe(`allSessions/session/${sessionId}`)
     })
 
-    it('returns flagged/chat/{id} route for "flagged" filter', () => {
-      expect(buildDefaultViewRoute('flagged', sessionId)).toBe(`flagged/chat/${sessionId}`)
+    it('returns flagged/session/{id} route for "flagged" filter', () => {
+      expect(buildDefaultViewRoute('flagged', sessionId)).toBe(`flagged/session/${sessionId}`)
     })
 
-    it('returns state/{stateId}/chat/{id} for state filter', () => {
-      expect(buildDefaultViewRoute('state:in-progress', sessionId)).toBe(`state/in-progress/chat/${sessionId}`)
+    it('returns state/{stateId}/session/{id} for state filter', () => {
+      expect(buildDefaultViewRoute('state:in-progress', sessionId)).toBe(`state/in-progress/session/${sessionId}`)
     })
 
-    it('returns label/{labelId}/chat/{id} for label filter', () => {
-      expect(buildDefaultViewRoute('label:priority', sessionId)).toBe(`label/priority/chat/${sessionId}`)
+    it('returns label/{labelId}/session/{id} for label filter', () => {
+      expect(buildDefaultViewRoute('label:priority', sessionId)).toBe(`label/priority/session/${sessionId}`)
     })
 
-    it('returns view/{viewId}/chat/{id} for view filter', () => {
-      expect(buildDefaultViewRoute('view:my-view', sessionId)).toBe(`view/my-view/chat/${sessionId}`)
+    it('returns view/{viewId}/session/{id} for view filter', () => {
+      expect(buildDefaultViewRoute('view:my-view', sessionId)).toBe(`view/my-view/session/${sessionId}`)
     })
 
-    it('falls back to allChats/chat/{id} for invalid filter', () => {
-      expect(buildDefaultViewRoute('bogus', sessionId)).toBe(`allChats/chat/${sessionId}`)
+    it('falls back to allSessions/session/{id} for invalid filter', () => {
+      expect(buildDefaultViewRoute('bogus', sessionId)).toBe(`allSessions/session/${sessionId}`)
     })
   })
 

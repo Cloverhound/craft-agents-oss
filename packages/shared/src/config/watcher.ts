@@ -22,6 +22,7 @@ import { join, dirname, basename, relative } from 'path';
 import type { FSWatcher } from 'fs';
 import { CONFIG_DIR } from './paths.ts';
 import { debug } from '../utils/debug.ts';
+import { readJsonFileSync } from '../utils/files.ts';
 import { perf } from '../utils/perf.ts';
 import { loadStoredConfig, type StoredConfig } from './storage.ts';
 import {
@@ -95,6 +96,8 @@ export interface ConfigWatcherCallbacks {
   onConfigChange?: (config: StoredConfig) => void;
   /** Called when preferences.json changes */
   onPreferencesChange?: (prefs: UserPreferences) => void;
+  /** Called when LLM connections array changes (add/remove/update connections) */
+  onLlmConnectionsChange?: (connections: import('./storage.ts').LlmConnection[]) => void;
 
   // Source callbacks
   /** Called when a specific source config changes (null if deleted) */
@@ -176,8 +179,7 @@ export function loadPreferences(): UserPreferences | null {
   }
 
   try {
-    const content = readFileSync(PREFERENCES_FILE, 'utf-8');
-    return JSON.parse(content) as UserPreferences;
+    return readJsonFileSync<UserPreferences>(PREFERENCES_FILE);
   } catch (error) {
     debug('[ConfigWatcher] Error loading preferences', error);
     return null;
@@ -204,6 +206,9 @@ export class ConfigWatcher {
   private knownSkills: Set<string> = new Set();
   private knownCredentials: Set<string> = new Set();
   private knownThemes: Set<string> = new Set();
+
+  // Track LLM connections for change detection (JSON string for deep comparison)
+  private lastLlmConnectionsHash: string = '';
 
   // Computed paths
   private workspaceDir: string;
@@ -284,8 +289,23 @@ export class ConfigWatcher {
     this.scanAppThemes();
     span.mark('scanAppThemes');
 
+    // Initialize LLM connections hash for change detection
+    this.initLlmConnectionsHash();
+    span.mark('initLlmConnectionsHash');
+
     debug('[ConfigWatcher] Started watching files');
     span.end();
+  }
+
+  /**
+   * Initialize LLM connections hash for change detection
+   */
+  private initLlmConnectionsHash(): void {
+    const config = loadStoredConfig();
+    if (config) {
+      const connections = config.llmConnections || [];
+      this.lastLlmConnectionsHash = JSON.stringify(connections);
+    }
   }
 
   /**
@@ -989,6 +1009,16 @@ export class ConfigWatcher {
     const config = loadStoredConfig();
     if (config) {
       this.callbacks.onConfigChange?.(config);
+
+      // Check for LLM connections changes
+      // Use JSON hash comparison for deep equality check
+      const connections = config.llmConnections || [];
+      const currentHash = JSON.stringify(connections);
+      if (currentHash !== this.lastLlmConnectionsHash) {
+        debug('[ConfigWatcher] LLM connections changed');
+        this.lastLlmConnectionsHash = currentHash;
+        this.callbacks.onLlmConnectionsChange?.(connections);
+      }
     } else {
       this.callbacks.onError?.('config.json', new Error('Failed to load config'));
     }

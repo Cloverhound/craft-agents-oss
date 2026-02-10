@@ -128,6 +128,41 @@ Cascading theme configuration: app → workspace (last wins)
 ### Credentials (`src/credentials/`)
 All sensitive credentials (API keys, OAuth tokens) are stored in an AES-256-GCM encrypted file at `~/.craft-agent/credentials.enc`. The `CredentialManager` provides the API for reading and writing credentials.
 
+### Bridge MCP Server Credential Flow
+
+For Codex sessions, API sources use the Bridge MCP Server which runs as a subprocess. Since it can't access the encrypted credentials directly, a **passive credential refresh** model is used:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Main Process (Electron)                                          │
+│                                                                  │
+│  1. User enables API source in session                          │
+│  2. decrypt credential from credentials.enc                      │
+│  3. write to .credential-cache.json (permissions: 0600)         │
+│     └── ~/.craft-agent/workspaces/{ws}/sources/{slug}/          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ reads on each request
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Bridge MCP Server (subprocess)                                   │
+│                                                                  │
+│  1. On tool call, read fresh credential from cache file         │
+│  2. Check expiresAt - if expired, return auth error             │
+│  3. Inject auth header and make API request                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key characteristics:**
+- **Passive refresh:** Bridge reads cache on each request (no active polling)
+- **Token expiry:** If OAuth token expires mid-session, requests fail with auth error
+- **User action required:** To refresh expired tokens, user must re-authenticate in UI
+- **Security:** Cache files have 0600 permissions (owner read/write only)
+
+**Files involved:**
+- Write: `apps/electron/src/main/sessions.ts` → `setupCodexSessionConfig()`
+- Read: `packages/bridge-mcp-server/src/index.ts` → `readCredential()`
+
 ### Configuration (`src/config/storage.ts`)
 Multi-workspace configuration stored in `~/.craft-agent/config.json`. Supports:
 - Multiple workspaces with separate MCP servers and sessions

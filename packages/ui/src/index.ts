@@ -99,6 +99,8 @@ export {
   ShikiCodeViewer,
   ShikiDiffViewer,
   getDiffStats,
+  UnifiedDiffViewer,
+  getUnifiedDiffStats,
   DiffViewerControls,
   DiffSplitIcon,
   DiffUnifiedIcon,
@@ -109,6 +111,7 @@ export {
   truncateFilePath,
   type ShikiCodeViewerProps,
   type ShikiDiffViewerProps,
+  type UnifiedDiffViewerProps,
   type DiffViewerControlsProps,
 } from './components/code-viewer'
 

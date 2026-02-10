@@ -16,6 +16,8 @@ import type {
   TodoStateChangedEvent,
   SessionFlaggedEvent,
   SessionUnflaggedEvent,
+  SessionArchivedEvent,
+  SessionUnarchivedEvent,
   NameChangedEvent,
   PermissionRequestEvent,
   CredentialRequestEvent,
@@ -29,6 +31,7 @@ import type {
   WorkingDirectoryChangedEvent,
   PermissionModeChangedEvent,
   SessionModelChangedEvent,
+  LLMConnectionChangedEvent,
   UserMessageEvent,
   SessionSharedEvent,
   SessionUnsharedEvent,
@@ -36,6 +39,7 @@ import type {
   AuthCompletedEvent,
   SessionResetToMessageEvent,
   UsageUpdateEvent,
+  TodosUpdatedEvent,
 } from '../types'
 import type { Message } from '../../../shared/types'
 import { generateMessageId, appendMessage } from '../helpers'
@@ -424,6 +428,24 @@ export function handleSessionModelChanged(
 }
 
 /**
+ * Handle connection_changed - sync session.llmConnection to renderer state
+ */
+export function handleConnectionChanged(
+  state: SessionState,
+  event: LLMConnectionChangedEvent
+): ProcessResult {
+  const { session, streaming } = state
+
+  return {
+    state: {
+      session: { ...session, llmConnection: event.connectionSlug },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
  * Handle user_message - confirms optimistic user message from backend
  *
  * Three statuses:
@@ -438,11 +460,11 @@ export function handleUserMessage(
   const { session, streaming } = state
   const { message, status } = event
 
-  // Find existing message by content + timestamp match (for optimistic updates)
-  // or by ID (for queued messages where backend created the ID)
+  // Find existing message by ID match (backend ID, optimistic ID, or content+timestamp fallback)
   const existingIndex = session.messages.findIndex(m =>
     m.role === 'user' && (
       m.id === message.id ||
+      (event.optimisticMessageId && m.id === event.optimisticMessageId) ||
       (m.content === message.content && Math.abs(m.timestamp - message.timestamp) < 5000)
     )
   )
@@ -450,6 +472,15 @@ export function handleUserMessage(
   let updatedMessages: Message[]
 
   if (existingIndex >= 0) {
+    const existingMessage = session.messages[existingIndex]
+
+    // Event sequence protection: don't regress from 'processing' back to 'queued'
+    // This handles out-of-order events (e.g., 'processing' arrives before 'queued')
+    if (status === 'queued' && existingMessage.isQueued === false) {
+      // Already progressed past queued state, ignore this late 'queued' event
+      return { state, effects: [] }
+    }
+
     // Update existing message - remove isPending, add isQueued if status is 'queued'
     updatedMessages = session.messages.map((m, i) => {
       if (i === existingIndex) {
@@ -575,6 +606,40 @@ export function handleSessionUnflagged(
   return {
     state: {
       session: { ...session, isFlagged: false },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle session_archived - mark session as archived
+ */
+export function handleSessionArchived(
+  state: SessionState,
+  _event: SessionArchivedEvent
+): ProcessResult {
+  const { session, streaming } = state
+  return {
+    state: {
+      session: { ...session, isArchived: true, archivedAt: Date.now() },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle session_unarchived - mark session as unarchived
+ */
+export function handleSessionUnarchived(
+  state: SessionState,
+  _event: SessionUnarchivedEvent
+): ProcessResult {
+  const { session, streaming } = state
+  return {
+    state: {
+      session: { ...session, isArchived: false, archivedAt: undefined },
       streaming,
     },
     effects: [],
@@ -807,6 +872,45 @@ export function handleUsageUpdate(
         ...session,
         tokenUsage: updatedTokenUsage,
       },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle todos_updated - Codex's turn/plan/updated notification
+ *
+ * Synthesizes a TodoWrite tool message so the existing turn-utils extraction
+ * logic picks up the todos and displays them in TurnCard.
+ */
+export function handleTodosUpdated(
+  state: SessionState,
+  event: TodosUpdatedEvent
+): ProcessResult {
+  const { session, streaming } = state
+
+  // Generate a unique tool use ID for this synthetic TodoWrite message
+  const toolUseId = `codex-plan-${event.turnId || Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+  // Create a synthetic TodoWrite tool message
+  // This is picked up by extractTodosFromActivities() in turn-utils.ts
+  const syntheticTodoMessage: Message = {
+    id: generateMessageId(),
+    role: 'tool',
+    content: event.explanation || 'Plan updated',
+    timestamp: Date.now(),
+    toolUseId,
+    toolName: 'TodoWrite',
+    toolInput: { todos: event.todos },
+    toolResult: 'Plan updated',
+    toolStatus: 'completed',
+    turnId: event.turnId,
+  }
+
+  return {
+    state: {
+      session: appendMessage(session, syntheticTodoMessage),
       streaming,
     },
     effects: [],

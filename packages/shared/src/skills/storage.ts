@@ -12,10 +12,9 @@ import {
   rmSync,
   statSync,
 } from 'fs';
-import { homedir } from 'os';
 import { join } from 'path';
 import matter from 'gray-matter';
-import type { LoadedSkill, SkillMetadata, SkillSource } from './types.ts';
+import type { LoadedSkill, SkillMetadata } from './types.ts';
 import { getWorkspaceSkillsPath } from '../workspaces/storage.ts';
 import {
   validateIconValue,
@@ -24,16 +23,6 @@ import {
   needsIconDownload,
   isIconUrl,
 } from '../utils/icon.ts';
-
-// ============================================================
-// Agent Skills Paths (Issue #171)
-// ============================================================
-
-/** Global agent skills directory: ~/.agents/skills/ */
-const GLOBAL_AGENT_SKILLS_DIR = join(homedir(), '.agents', 'skills');
-
-/** Project-level agent skills directory name */
-const PROJECT_AGENT_SKILLS_DIR = '.agents/skills';
 
 // ============================================================
 // Parsing
@@ -75,12 +64,12 @@ function parseSkillFile(content: string): { metadata: SkillMetadata; body: strin
 // ============================================================
 
 /**
- * Load a single skill from a directory
- * @param skillsDir - Absolute path to skills directory
+ * Load a single skill from a workspace
+ * @param workspaceRoot - Absolute path to workspace root
  * @param slug - Skill directory name
- * @param source - Where this skill is loaded from
  */
-function loadSkillFromDir(skillsDir: string, slug: string, source: SkillSource): LoadedSkill | null {
+export function loadSkill(workspaceRoot: string, slug: string): LoadedSkill | null {
+  const skillsDir = getWorkspaceSkillsPath(workspaceRoot);
   const skillDir = join(skillsDir, slug);
   const skillFile = join(skillDir, 'SKILL.md');
 
@@ -113,16 +102,16 @@ function loadSkillFromDir(skillsDir: string, slug: string, source: SkillSource):
     content: parsed.body,
     iconPath: findIconFile(skillDir),
     path: skillDir,
-    source,
   };
 }
 
 /**
- * Load all skills from a directory
- * @param skillsDir - Absolute path to skills directory
- * @param source - Where these skills are loaded from
+ * Load all skills from a workspace
+ * @param workspaceRoot - Absolute path to workspace root
  */
-function loadSkillsFromDir(skillsDir: string, source: SkillSource): LoadedSkill[] {
+export function loadWorkspaceSkills(workspaceRoot: string): LoadedSkill[] {
+  const skillsDir = getWorkspaceSkillsPath(workspaceRoot);
+
   if (!existsSync(skillsDir)) {
     return [];
   }
@@ -134,7 +123,7 @@ function loadSkillsFromDir(skillsDir: string, source: SkillSource): LoadedSkill[
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
 
-      const skill = loadSkillFromDir(skillsDir, entry.name, source);
+      const skill = loadSkill(workspaceRoot, entry.name);
       if (skill) {
         skills.push(skill);
       }
@@ -144,57 +133,6 @@ function loadSkillsFromDir(skillsDir: string, source: SkillSource): LoadedSkill[
   }
 
   return skills;
-}
-
-/**
- * Load a single skill from a workspace
- * @param workspaceRoot - Absolute path to workspace root
- * @param slug - Skill directory name
- */
-export function loadSkill(workspaceRoot: string, slug: string): LoadedSkill | null {
-  const skillsDir = getWorkspaceSkillsPath(workspaceRoot);
-  return loadSkillFromDir(skillsDir, slug, 'workspace');
-}
-
-/**
- * Load all skills from a workspace
- * @param workspaceRoot - Absolute path to workspace root
- */
-export function loadWorkspaceSkills(workspaceRoot: string): LoadedSkill[] {
-  const skillsDir = getWorkspaceSkillsPath(workspaceRoot);
-  return loadSkillsFromDir(skillsDir, 'workspace');
-}
-
-/**
- * Load all skills from all sources (global, workspace, project)
- * Skills with the same slug are overridden by higher-priority sources.
- * Priority: global (lowest) < workspace < project (highest)
- *
- * @param workspaceRoot - Absolute path to workspace root
- * @param projectRoot - Optional project root (working directory) for project-level skills
- */
-export function loadAllSkills(workspaceRoot: string, projectRoot?: string): LoadedSkill[] {
-  const skillsBySlug = new Map<string, LoadedSkill>();
-
-  // 1. Global skills (lowest priority): ~/.agents/skills/
-  for (const skill of loadSkillsFromDir(GLOBAL_AGENT_SKILLS_DIR, 'global')) {
-    skillsBySlug.set(skill.slug, skill);
-  }
-
-  // 2. Workspace skills (medium priority)
-  for (const skill of loadWorkspaceSkills(workspaceRoot)) {
-    skillsBySlug.set(skill.slug, skill);
-  }
-
-  // 3. Project skills (highest priority): {projectRoot}/.agents/skills/
-  if (projectRoot) {
-    const projectSkillsDir = join(projectRoot, PROJECT_AGENT_SKILLS_DIR);
-    for (const skill of loadSkillsFromDir(projectSkillsDir, 'project')) {
-      skillsBySlug.set(skill.slug, skill);
-    }
-  }
-
-  return Array.from(skillsBySlug.values());
 }
 
 /**

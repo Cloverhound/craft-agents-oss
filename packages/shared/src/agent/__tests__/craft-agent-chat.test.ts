@@ -55,8 +55,8 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => {
 
 // Now import CraftAgent (after mock is set up)
 // Note: Dynamic import to ensure mock is applied first
-let CraftAgent: typeof import('../craft-agent').CraftAgent;
-let AbortReason: typeof import('../craft-agent').AbortReason;
+let CraftAgent: typeof import('../claude-agent').CraftAgent;
+let AbortReason: typeof import('../claude-agent').AbortReason;
 
 // ============================================================================
 // Test Helpers
@@ -100,7 +100,7 @@ function findEventsByType(events: unknown[], type: string) {
 
 beforeEach(async () => {
   // Dynamically import after mock is set up
-  const module = await import('../craft-agent');
+  const module = await import('../claude-agent');
   CraftAgent = module.CraftAgent;
   AbortReason = module.AbortReason;
 
@@ -228,7 +228,7 @@ describe('CraftAgent.chat() - Session Continuity', () => {
       workspace: createTestWorkspace(),
       session: createTestSession(),
       isHeadless: true,
-      onSdkSessionIdUpdate: (id) => {
+      onSdkSessionIdUpdate: (id: string) => {
         capturedSessionId = id;
       },
     });
@@ -298,7 +298,7 @@ describe('CraftAgent.chat() - Session Continuity', () => {
       workspace: createTestWorkspace(),
       session: createTestSession(),
       isHeadless: true,
-      onSdkSessionIdUpdate: (id) => {
+      onSdkSessionIdUpdate: (id: string) => {
         sessionIdUpdates.push(id);
       },
     });
@@ -692,7 +692,7 @@ describe('CraftAgent - State Management', () => {
       workspace: createTestWorkspace(),
       session: createTestSession(),
       isHeadless: true,
-      onSdkSessionIdUpdate: (id) => {
+      onSdkSessionIdUpdate: (id: string) => {
         capturedSessionId = id;
       },
     });

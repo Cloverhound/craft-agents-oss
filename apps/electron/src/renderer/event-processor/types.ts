@@ -56,6 +56,8 @@ export interface ToolStartEvent {
   toolUseId: string
   toolName: string
   toolInput?: Record<string, unknown>
+  /** Timestamp from main process for consistent ordering */
+  timestamp?: number
   turnId?: string
   parentToolUseId?: string
   toolIntent?: string
@@ -149,6 +151,19 @@ export interface SessionFlaggedEvent {
 
 export interface SessionUnflaggedEvent {
   type: 'session_unflagged'
+  sessionId: string
+}
+
+/**
+ * Session archived/unarchived events (external metadata change)
+ */
+export interface SessionArchivedEvent {
+  type: 'session_archived'
+  sessionId: string
+}
+
+export interface SessionUnarchivedEvent {
+  type: 'session_unarchived'
   sessionId: string
 }
 
@@ -268,6 +283,15 @@ export interface SessionModelChangedEvent {
 }
 
 /**
+ * LLM connection changed event - syncs session.llmConnection to renderer
+ */
+export interface LLMConnectionChangedEvent {
+  type: 'connection_changed'
+  sessionId: string
+  connectionSlug: string
+}
+
+/**
  * Credential request event - prompts user for credentials
  */
 export interface CredentialRequestEvent {
@@ -321,6 +345,8 @@ export interface UserMessageEvent {
   sessionId: string
   message: Message
   status: 'accepted' | 'queued' | 'processing'
+  /** Frontend's optimistic message ID for reliable matching */
+  optimisticMessageId?: string
 }
 
 /**
@@ -398,6 +424,22 @@ export interface UsageUpdateEvent {
 }
 
 /**
+ * Codex turn/plan/updated notification - task list updates
+ * Synthesized into TodoWrite tool messages for TurnCard display
+ */
+export interface TodosUpdatedEvent {
+  type: 'todos_updated'
+  sessionId: string
+  todos: Array<{
+    content: string
+    status: 'pending' | 'in_progress' | 'completed'
+    activeForm?: string
+  }>
+  turnId?: string
+  explanation?: string | null
+}
+
+/**
  * Union of all agent events
  */
 export type AgentEvent =
@@ -415,6 +457,8 @@ export type AgentEvent =
   | TodoStateChangedEvent
   | SessionFlaggedEvent
   | SessionUnflaggedEvent
+  | SessionArchivedEvent
+  | SessionUnarchivedEvent
   | NameChangedEvent
   | PlanSubmittedEvent
   | StatusEvent
@@ -426,6 +470,7 @@ export type AgentEvent =
   | WorkingDirectoryChangedEvent
   | PermissionModeChangedEvent
   | SessionModelChangedEvent
+  | LLMConnectionChangedEvent
   | TaskBackgroundedEvent
   | ShellBackgroundedEvent
   | TaskProgressEvent
@@ -437,6 +482,7 @@ export type AgentEvent =
   | SourceActivatedEvent
   | SessionResetToMessageEvent
   | UsageUpdateEvent
+  | TodosUpdatedEvent
 
 /**
  * Side effects that need to be handled outside the pure processor

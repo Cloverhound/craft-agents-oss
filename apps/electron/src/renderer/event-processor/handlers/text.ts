@@ -89,6 +89,16 @@ export function handleTextComplete(
   }
 
   if (msgIndex !== -1) {
+    const existingMsg = session.messages[msgIndex]
+
+    // Don't overwrite a completed intermediate message with another intermediate —
+    // each thinking block (e.g. Codex reasoning between tool calls) should be distinct
+    if (!existingMsg.isStreaming && existingMsg.isIntermediate && event.isIntermediate) {
+      msgIndex = -1
+    }
+  }
+
+  if (msgIndex !== -1) {
     // Update existing message with final content
     // Only update lastMessageAt for final (non-intermediate) messages
     const shouldUpdateTimestamp = !event.isIntermediate

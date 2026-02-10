@@ -1,8 +1,7 @@
-import { CraftAgent, type CraftAgentConfig, type PermissionMode, type SdkMcpServerConfig } from '../agent/craft-agent.ts';
+import { ClaudeAgent, type ClaudeAgentConfig, type PermissionMode, type SdkMcpServerConfig } from '../agent/claude-agent.ts';
 import { createApiServer } from '../sources/api-tools.ts';
-import { listSessions, getOrCreateSessionById, updateSessionSdkId } from '../sessions/storage.ts';
+import { listActiveSessions, getOrCreateSessionById, updateSessionSdkId } from '../sessions/storage.ts';
 import { debug } from '../utils/debug.ts';
-import { DEFAULT_MODEL } from '../config/models.ts';
 import { getCredentialManager } from '../credentials/index.ts';
 import type { CredentialId, CredentialType } from '../credentials/types.ts';
 import type {
@@ -41,7 +40,7 @@ const SAFE_COMMANDS = new Set([
  *
  * Reuses existing components:
  * - CraftMcpClient for MCP connections
- * - CraftAgent for query execution
+ * - ClaudeAgent for query execution
  *
  * Handles interactions automatically:
  * - Permissions: based on policy (deny-all, allow-safe, allow-all)
@@ -50,7 +49,7 @@ const SAFE_COMMANDS = new Set([
  */
 export class HeadlessRunner {
   private config: HeadlessConfig;
-  private agent: CraftAgent | null = null;
+  private agent: ClaudeAgent | null = null;
 
   // Session management
   private workspaceRootPath: string | null = null;
@@ -185,14 +184,14 @@ ${this.config.prompt}
   }
 
   /**
-   * Create CraftAgent with headless callbacks for permissions and questions.
+   * Create ClaudeAgent with headless callbacks for permissions and questions.
    */
   private async createAgent(): Promise<void> {
     // Map permission policy to the new PermissionMode system
     const permissionMode = policyToPermissionMode(this.config.permissionPolicy);
     debug('[HeadlessRunner] Using permission mode:', permissionMode, 'from policy:', this.config.permissionPolicy || 'deny-all');
 
-    const agentConfig: CraftAgentConfig = {
+    const agentConfig: ClaudeAgentConfig = {
       workspace: this.config.workspace,
       model: this.config.model,
       isHeadless: true,
@@ -206,7 +205,7 @@ ${this.config.prompt}
       },
     };
 
-    this.agent = new CraftAgent(agentConfig);
+    this.agent = new ClaudeAgent(agentConfig);
 
     // Wire up permission handler based on policy
     this.agent.onPermissionRequest = (request) => {
@@ -220,7 +219,8 @@ ${this.config.prompt}
 
       if (policy === 'allow-safe') {
         // Extract base command (first word)
-        const baseCommand = request.command.trim().split(/\s+/)[0] || '';
+        const command = request.command ?? '';
+        const baseCommand = command.trim().split(/\s+/)[0] || '';
         const allowed = SAFE_COMMANDS.has(baseCommand);
         debug('[HeadlessRunner] Safe check:', baseCommand, 'allowed:', allowed);
         this.agent!.respondToPermission(request.requestId, allowed, false);
@@ -245,8 +245,8 @@ ${this.config.prompt}
         // Fresh SDK session - will be saved after run
       }
     } else if (this.config.sessionResume && this.workspaceRootPath) {
-      // --session-resume: continue the last session for this workspace
-      const sessions = listSessions(this.workspaceRootPath);
+      // --session-resume: continue the last active (non-archived) session for this workspace
+      const sessions = listActiveSessions(this.workspaceRootPath);
       if (sessions.length > 0 && sessions[0]) {
         this.sessionIdToUpdate = sessions[0].id;  // Save to update SDK session ID after run
         if (sessions[0].sdkSessionId) {

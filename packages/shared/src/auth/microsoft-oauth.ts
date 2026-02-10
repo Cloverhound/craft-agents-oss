@@ -19,7 +19,6 @@ import { randomBytes, createHash } from 'crypto';
 import { openUrl } from '../utils/open-url.ts';
 import { createCallbackServer, type AppType } from './callback-server.ts';
 import { type MicrosoftService } from '../sources/types.ts';
-import { type OAuthSessionContext, buildOAuthDeeplinkUrl } from './types.ts';
 
 // Re-export MicrosoftService type for convenient access
 export type { MicrosoftService };
@@ -90,8 +89,6 @@ export interface MicrosoftOAuthOptions {
   scopes?: string[];
   /** App type for callback server styling */
   appType?: AppType;
-  /** Session context for building deeplink back to chat after OAuth */
-  sessionContext?: OAuthSessionContext;
 }
 
 /**
@@ -296,10 +293,9 @@ export async function startMicrosoftOAuth(
     const pkce = generatePKCE();
     const state = generateState();
 
-    // Start callback server with deeplink for returning to chat session
+    // Start callback server
     const appType = options.appType || 'electron';
-    const deeplinkUrl = buildOAuthDeeplinkUrl(options.sessionContext);
-    const callbackServer = await createCallbackServer({ appType, deeplinkUrl });
+    const callbackServer = await createCallbackServer({ appType });
     const redirectUri = `${callbackServer.url}/callback`;
 
     // Build authorization URL
