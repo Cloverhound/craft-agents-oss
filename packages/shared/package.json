@@ -1,7 +1,7 @@
 {
   "name": "@craft-agent/shared",
-  "version": "0.4.1",
-  "codexVersion": "craft-v0.4.0",
+  "version": "0.4.3",
+  "codexVersion": "craft-v0.4.1",
   "license": "Apache-2.0",
   "description": "Shared business logic for Craft Agents - agent, auth, config, credentials, MCP integration",
   "type": "module",
@@ -29,7 +29,6 @@
     "./credentials/oauth-flow": "./src/credentials/oauth-flow.ts",
     "./credentials/registry": "./src/credentials/registry.ts",
     "./credentials/matcher": "./src/credentials/matcher.ts",
-    "./headless": "./src/headless/index.ts",
     "./mcp": "./src/mcp/index.ts",
     "./prompts": "./src/prompts/index.ts",
     "./sessions": "./src/sessions/index.ts",
@@ -44,6 +43,7 @@
     "./icons": "./src/icons/index.ts",
     "./colors": "./src/colors/index.ts",
     "./utils/icon-constants": "./src/utils/icon-constants.ts",
+    "./utils/workspace": "./src/utils/workspace.ts",
     "./labels": "./src/labels/index.ts",
     "./labels/auto": "./src/labels/auto/index.ts",
     "./labels/storage": "./src/labels/storage.ts",
@@ -68,6 +68,7 @@
     "@isaacs/ttlcache": "^2.1.4",
     "@leeoniya/ufuzzy": "^1.0.19",
     "bash-parser": "^0.5.0",
+    "croner": "^10.0.1",
     "filtrex": "^3.1.0",
     "incr-regex-package": "^1.0.4",
     "shell-quote": "^1.8.3"

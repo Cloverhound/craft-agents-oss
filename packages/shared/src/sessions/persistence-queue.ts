@@ -1,8 +1,9 @@
 import { writeFile, rename, unlink } from 'fs/promises'
+import { dirname } from 'path'
 import type { StoredSession, SessionHeader } from './types.js'
 import { getSessionFilePath, ensureSessionsDir, ensureSessionDir } from './storage.js'
 import { toPortablePath } from '../utils/paths.js'
-import { createSessionHeader } from './jsonl.js'
+import { createSessionHeader, makeSessionPathPortable } from './jsonl.js'
 import { debug } from '../utils/debug.js'
 
 interface PendingWrite {
@@ -75,9 +76,11 @@ class SessionPersistenceQueue {
       // Filter out intermediate messages - they're transient streaming status updates
       const header = createSessionHeader(storageSession)
       const persistableMessages = storageSession.messages.filter(m => !m.isIntermediate)
+      // Use original absolute sessionDir (before toPortablePath) for path replacement
+      const sessionDir = dirname(filePath)
       const lines = [
-        JSON.stringify(header),
-        ...persistableMessages.map(m => JSON.stringify(m)),
+        makeSessionPathPortable(JSON.stringify(header), sessionDir),
+        ...persistableMessages.map(m => makeSessionPathPortable(JSON.stringify(m), sessionDir)),
       ]
 
       // Atomic write: write to .tmp then rename over the real file.

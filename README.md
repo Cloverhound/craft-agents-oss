@@ -96,6 +96,7 @@ bun run electron:start
 - **Multi-File Diff**: VS Code-style window for viewing all file changes in a turn
 - **Skills**: Specialized agent instructions stored per-workspace
 - **File Attachments**: Drag-drop images, PDFs, Office documents with auto-conversion
+- **Hooks**: Event-driven automation — run commands or create sessions on label changes, schedules, tool use, and more
 
 ## Quick Start
 
@@ -257,6 +258,26 @@ Or simply tell the agent you want to connect Gmail/Calendar/Drive - it will guid
 - Never commit credentials to version control
 - For production use, consider getting your OAuth consent screen verified by Google
 
+## Configure Third-Party Providers (OpenRouter, Vercel AI Gateway, Ollama, etc.)
+
+Third-party and self-hosted LLM providers are supported **only through the Claude / Anthropic API Key** connection. When you select **Anthropic API Key** during setup, you can choose from:
+
+| Provider | Endpoint | Notes |
+|----------|----------|-------|
+| **OpenRouter** | `https://openrouter.ai/api` | Access Claude, GPT, Llama, Gemini, and hundreds of other models through a single API key. Use `provider/model-name` format (e.g. `anthropic/claude-opus-4.6`). |
+| **Vercel AI Gateway** | `https://ai-gateway.vercel.sh` | Route requests through Vercel's AI Gateway with built-in observability and caching. |
+| **Ollama** | `http://localhost:11434` | Run open-source models locally. No API key required. |
+| **Custom** | Any URL | Any OpenAI-compatible or Anthropic-compatible endpoint. |
+
+### Why only under Claude?
+
+Craft Agents uses two different agent backends:
+
+- **Claude** — powered by the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk), which natively supports custom base URLs and provider routing. This makes it straightforward to point requests at any compatible endpoint.
+- **Codex** — powered by the [Codex app-server](https://github.com/lukilabs/craft-agents-codex), which communicates via JSON-RPC over stdio. Codex connections are limited to **direct OpenAI API** (via API key or ChatGPT subscription OAuth).
+
+If you want to use models from OpenRouter, Vercel AI Gateway, Ollama, or any other third-party provider, set up a **Claude / Anthropic API Key** connection and select the desired endpoint.
+
 ## Configuration
 
 Configuration is stored at `~/.craft-agent/`:
@@ -271,11 +292,59 @@ Configuration is stored at `~/.craft-agent/`:
     └── {id}/
         ├── config.json      # Workspace settings
         ├── theme.json       # Workspace theme override
+        ├── hooks.json       # Event-driven automation hooks
         ├── sessions/        # Session data (JSONL)
         ├── sources/         # Connected sources
         ├── skills/          # Custom skills
         └── statuses/        # Status configuration
 ```
+
+### Hooks (Automation)
+
+Hooks let you automate workflows by triggering actions when events happen — labels change, sessions start, tools run, or on a cron schedule.
+
+**Just ask the agent:**
+- "Set up a daily standup briefing every weekday at 9am"
+- "Notify me when a session is labelled urgent"
+- "Log all permission mode changes to a file"
+- "Every Friday at 5pm, summarise this week's completed tasks"
+
+Or configure manually in `~/.craft-agent/workspaces/{id}/hooks.json`:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "SchedulerTick": [
+      {
+        "cron": "0 9 * * 1-5",
+        "timezone": "America/New_York",
+        "labels": ["Scheduled"],
+        "hooks": [
+          { "type": "prompt", "prompt": "Check @github for new issues assigned to me" }
+        ]
+      }
+    ],
+    "LabelAdd": [
+      {
+        "matcher": "^urgent$",
+        "permissionMode": "allow-all",
+        "hooks": [
+          { "type": "command", "command": "osascript -e 'display notification \"Urgent session\" with title \"Craft Agent\"'" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Two hook types:**
+- **Command hooks** — run shell commands with event data as environment variables (`$CRAFT_LABEL`, `$CRAFT_SESSION_ID`, etc.)
+- **Prompt hooks** — create a new agent session with a prompt (supports `@mentions` for sources and skills)
+
+**Supported events:** `LabelAdd`, `LabelRemove`, `PermissionModeChange`, `FlagChange`, `TodoStateChange`, `SchedulerTick`, `PreToolUse`, `PostToolUse`, `SessionStart`, `SessionEnd`, and more.
+
+See the [Hooks documentation](https://agents.craft.do/docs/hooks/overview) for the full reference.
 
 ## Advanced Features
 

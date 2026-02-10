@@ -12,7 +12,7 @@ import { registerOnboardingHandlers } from './onboarding'
 import { IPC_CHANNELS, type FileAttachment, type StoredAttachment, type SendMessageOptions, type LlmConnectionSetup } from '../shared/types'
 import { readFileAttachment, perf, validateImageForClaudeAPI, IMAGE_LIMITS } from '@craft-agent/shared/utils'
 import { safeJsonParse } from '@craft-agent/shared/utils/files'
-import { getPreferencesPath, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, loadStoredConfig, saveConfig, type Workspace, getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, isOpenAIProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus } from '@craft-agent/shared/config'
+import { getPreferencesPath, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, loadStoredConfig, saveConfig, type Workspace, getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, isOpenAIProvider, isCopilotProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus } from '@craft-agent/shared/config'
 import { getSessionAttachmentsPath, validateSessionId } from '@craft-agent/shared/sessions'
 import { loadWorkspaceSources, getSourcesBySlugs, type LoadedSource } from '@craft-agent/shared/sources'
 import { isValidThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
@@ -82,6 +82,11 @@ const BUILT_IN_CONNECTION_TEMPLATES: Record<string, {
     providerType: 'openai_compat', // Always use compat for API key (5.3 is OAuth-only)
     authType: (h) => h ? 'api_key_with_endpoint' : 'api_key',
   },
+  'copilot': {
+    name: 'GitHub Copilot',
+    providerType: 'copilot',
+    authType: 'oauth',
+  },
 }
 
 /**
@@ -115,6 +120,112 @@ function createBuiltInConnection(slug: string, baseUrl?: string | null): LlmConn
     defaultModel: getDefaultModelForConnection(providerType),
     createdAt: Date.now(),
   }
+}
+
+/**
+ * Fetch available models from the Copilot SDK and update the connection.
+ * Spins up a temporary CopilotClient, calls listModels(), then stops it.
+ * Throws on failure — Copilot has no hardcoded fallback models.
+ */
+async function fetchAndStoreCopilotModels(slug: string, accessToken: string): Promise<void> {
+  const { CopilotClient } = await import('@github/copilot-sdk')
+
+  // Resolve @github/copilot CLI path — import.meta.resolve() breaks in esbuild bundles
+  const copilotRelativePath = join('node_modules', '@github', 'copilot', 'index.js')
+  const basePath = app.isPackaged ? app.getAppPath() : process.cwd()
+  let copilotCliPath = join(basePath, copilotRelativePath)
+  if (!existsSync(copilotCliPath)) {
+    const monorepoRoot = join(basePath, '..', '..')
+    copilotCliPath = join(monorepoRoot, copilotRelativePath)
+  }
+
+  const debugLines: string[] = []
+  const debugLog = (msg: string) => {
+    const line = `[${new Date().toISOString()}] ${msg}`
+    debugLines.push(line)
+    ipcLog.info(msg)
+  }
+
+  debugLog(`Copilot CLI path: ${copilotCliPath} (exists: ${existsSync(copilotCliPath)})`)
+  debugLog(`Access token: ${accessToken.substring(0, 8)}...${accessToken.substring(accessToken.length - 4)}`)
+
+  // Pass token via COPILOT_GITHUB_TOKEN env var instead of githubToken option.
+  // The githubToken option uses --auth-token-env which bypasses the CLI's normal
+  // copilot_internal/v2/token exchange, causing 403 on model listing.
+  // Using the env var lets the CLI's auth resolution handle token exchange properly.
+  const prevToken = process.env.COPILOT_GITHUB_TOKEN
+  process.env.COPILOT_GITHUB_TOKEN = accessToken
+
+  const client = new CopilotClient({
+    useStdio: true,
+    autoStart: true,
+    logLevel: 'debug',
+    ...(existsSync(copilotCliPath) ? { cliPath: copilotCliPath } : {}),
+  })
+
+  const writeDebugFile = async () => {
+    try {
+      const debugPath = join(homedir(), '.craft-agent', 'copilot-debug.log')
+      await writeFile(debugPath, debugLines.join('\n') + '\n', 'utf-8')
+    } catch { /* ignore */ }
+  }
+
+  const restoreEnv = () => {
+    if (prevToken !== undefined) {
+      process.env.COPILOT_GITHUB_TOKEN = prevToken
+    } else {
+      delete process.env.COPILOT_GITHUB_TOKEN
+    }
+  }
+
+  let models: Array<{ id: string; name: string; supportedReasoningEfforts?: string[] }>
+  try {
+    debugLog('Starting Copilot client...')
+    await client.start()
+    debugLog('Copilot client started, fetching models...')
+    models = await client.listModels()
+    debugLog(`listModels returned ${models?.length ?? 0} models: ${models?.map(m => m.id).join(', ')}`)
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error)
+    const stack = error instanceof Error ? error.stack : undefined
+    debugLog(`Copilot listModels FAILED: ${msg}`)
+    if (stack) debugLog(`Stack: ${stack}`)
+    await writeDebugFile()
+    restoreEnv()
+    // Ensure cleanup
+    try { await client.stop() } catch { /* ignore cleanup errors */ }
+    throw error
+  }
+  await client.stop()
+  restoreEnv()
+  await writeDebugFile()
+
+  if (!models || models.length === 0) {
+    throw new Error('No models returned from Copilot API. Your Copilot plan may not support this feature.')
+  }
+
+  const modelDefs = models.map((m: { id: string; name: string; supportedReasoningEfforts?: string[] }) => ({
+    id: m.id,
+    name: m.name,
+    shortName: m.name,
+    description: '',
+    provider: 'copilot' as const,
+    contextWindow: 200_000,
+    supportsThinking: !!(m.supportedReasoningEfforts && m.supportedReasoningEfforts.length > 0),
+  }))
+
+  updateLlmConnection(slug, {
+    models: modelDefs,
+    // Keep current defaultModel if it's still in the list, otherwise use the first
+    ...(() => {
+      const current = getLlmConnection(slug)
+      const currentDefault = current?.defaultModel
+      const stillValid = currentDefault && modelDefs.some(m => m.id === currentDefault)
+      return stillValid ? {} : { defaultModel: modelDefs[0].id }
+    })(),
+  })
+
+  ipcLog.info(`Fetched ${modelDefs.length} Copilot models: ${modelDefs.map(m => m.id).join(', ')}`)
 }
 
 /**
@@ -182,10 +293,11 @@ async function validateFilePath(filePath: string): Promise<string> {
 }
 
 export function registerIpcHandlers(sessionManager: SessionManager, windowManager: WindowManager): void {
-  // Get all sessions
-  ipcMain.handle(IPC_CHANNELS.GET_SESSIONS, async () => {
+  // Get all sessions for the calling window's workspace
+  ipcMain.handle(IPC_CHANNELS.GET_SESSIONS, async (event) => {
     const end = perf.start('ipc.getSessions')
-    const sessions = sessionManager.getSessions()
+    const workspaceId = windowManager.getWorkspaceForWindow(event.sender.id)
+    const sessions = sessionManager.getSessions(workspaceId ?? undefined)
     end()
     return sessions
   })
@@ -856,6 +968,17 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     return !app.isPackaged
   })
 
+  // Release notes
+  ipcMain.handle(IPC_CHANNELS.GET_RELEASE_NOTES, () => {
+    const { getCombinedReleaseNotes } = require('@craft-agent/shared/release-notes') as typeof import('@craft-agent/shared/release-notes')
+    return getCombinedReleaseNotes()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.GET_LATEST_RELEASE_VERSION, () => {
+    const { getLatestReleaseVersion } = require('@craft-agent/shared/release-notes') as typeof import('@craft-agent/shared/release-notes')
+    return getLatestReleaseVersion()
+  })
+
   // Get git branch for a directory (returns null if not a git repo or git unavailable)
   ipcMain.handle(IPC_CHANNELS.GET_GIT_BRANCH, (_event, dirPath: string) => {
     try {
@@ -1376,6 +1499,14 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         ipcLog.info(`Set default LLM connection: ${setup.slug}`)
       }
 
+      // For Copilot connections, fetch available models from the API
+      if (isCopilotProvider(pendingConnection.providerType)) {
+        const oauth = await manager.getLlmOAuth(setup.slug)
+        if (oauth?.accessToken) {
+          await fetchAndStoreCopilotModels(setup.slug, oauth.accessToken)
+        }
+      }
+
       // Reinitialize auth with the newly-created connection's slug
       // (not the default, which may be a different connection)
       const authSlug = getDefaultLlmConnection() || setup.slug
@@ -1667,6 +1798,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
       defaultChatFilter: config?.defaults?.defaultChatFilter,
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
+      enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
     }
   })
 
@@ -1966,6 +2098,30 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         } catch {
           return { success: false, error: `API error: ${response.status} ${response.statusText}` }
         }
+      }
+
+      // ========================================
+      // GitHub Copilot OAuth validation
+      // ========================================
+      // Device flow tokens don't expire — just check if access token exists
+      if (connection.providerType === 'copilot' && connection.authType === 'oauth') {
+        const oauth = await credentialManager.getLlmOAuth(slug)
+        if (!oauth?.accessToken) {
+          return { success: false, error: 'Not authenticated. Please sign in with GitHub.' }
+        }
+
+        // Fetch available models from Copilot API — required, no fallback models
+        try {
+          await fetchAndStoreCopilotModels(slug, oauth.accessToken)
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : 'Unknown error'
+          ipcLog.error(`Copilot model fetch failed during validation: ${msg}`)
+          return { success: false, error: `Failed to load Copilot models: ${msg}` }
+        }
+
+        ipcLog.info(`LLM connection validated (GitHub OAuth): ${slug}`)
+        touchLlmConnection(slug)
+        return { success: true }
       }
 
       // ========================================
@@ -2306,6 +2462,92 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   })
 
   // ============================================================
+  // GitHub Copilot OAuth
+  // ============================================================
+
+  // Start GitHub Copilot OAuth flow (device flow)
+  ipcMain.handle(IPC_CHANNELS.COPILOT_START_OAUTH, async (event, connectionSlug: string): Promise<{
+    success: boolean
+    error?: string
+  }> => {
+    try {
+      const { startGithubOAuth } = await import('@craft-agent/shared/auth')
+      const credentialManager = getCredentialManager()
+
+      ipcLog.info(`Starting GitHub OAuth device flow for connection: ${connectionSlug}`)
+
+      // Start device flow — tokens are returned directly once user authorizes
+      const tokens = await startGithubOAuth(
+        (status) => {
+          ipcLog.info(`[GitHub OAuth] ${status}`)
+        },
+        (deviceCode) => {
+          // Send device code to renderer so the UI can display it
+          event.sender.send(IPC_CHANNELS.COPILOT_DEVICE_CODE, deviceCode)
+        },
+      )
+
+      // Store token in credential manager (no refresh token/expiry for device flow)
+      await credentialManager.setLlmOAuth(connectionSlug, {
+        accessToken: tokens.accessToken,
+      })
+
+      ipcLog.info('GitHub OAuth completed successfully')
+      return { success: true }
+    } catch (error) {
+      ipcLog.error('GitHub OAuth failed:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'OAuth authentication failed',
+      }
+    }
+  })
+
+  // Cancel ongoing GitHub OAuth flow
+  ipcMain.handle(IPC_CHANNELS.COPILOT_CANCEL_OAUTH, async (): Promise<{ success: boolean }> => {
+    try {
+      const { cancelGithubOAuth } = await import('@craft-agent/shared/auth')
+      cancelGithubOAuth()
+      ipcLog.info('GitHub OAuth cancelled')
+      return { success: true }
+    } catch (error) {
+      ipcLog.error('Failed to cancel GitHub OAuth:', error)
+      return { success: false }
+    }
+  })
+
+  // Get GitHub Copilot authentication status
+  // Device flow tokens don't expire — just check if access token exists
+  ipcMain.handle(IPC_CHANNELS.COPILOT_GET_AUTH_STATUS, async (_event, connectionSlug: string): Promise<{
+    authenticated: boolean
+  }> => {
+    try {
+      const credentialManager = getCredentialManager()
+      const creds = await credentialManager.getLlmOAuth(connectionSlug)
+
+      return {
+        authenticated: !!creds?.accessToken,
+      }
+    } catch (error) {
+      ipcLog.error('Failed to get GitHub auth status:', error)
+      return { authenticated: false }
+    }
+  })
+
+  // Logout from Copilot (clear stored tokens)
+  ipcMain.handle(IPC_CHANNELS.COPILOT_LOGOUT, async (_event, connectionSlug: string): Promise<{ success: boolean }> => {
+    try {
+      const credentialManager = getCredentialManager()
+      await credentialManager.deleteLlmCredentials(connectionSlug)
+      ipcLog.info('Copilot credentials cleared')
+      return { success: true }
+    } catch (error) {
+      ipcLog.error('Failed to clear Copilot credentials:', error)
+      return { success: false }
+    }
+  })
+
+  // ============================================================
   // Session Info Panel (files, notes, file watching)
   // ============================================================
 
@@ -2497,6 +2739,14 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`)
     const { deleteSource } = await import('@craft-agent/shared/sources')
     deleteSource(workspace.rootPath, sourceSlug)
+
+    // Clean up stale slug from workspace default sources
+    const { loadWorkspaceConfig, saveWorkspaceConfig } = await import('@craft-agent/shared/workspaces')
+    const config = loadWorkspaceConfig(workspace.rootPath)
+    if (config?.defaults?.enabledSourceSlugs?.includes(sourceSlug)) {
+      config.defaults.enabledSourceSlugs = config.defaults.enabledSourceSlugs.filter(s => s !== sourceSlug)
+      saveWorkspaceConfig(workspace.rootPath, config)
+    }
   })
 
   // Start OAuth flow for a source
@@ -2763,15 +3013,17 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   // Skills (Workspace-scoped)
   // ============================================================
 
-  // Get all skills for a workspace
-  ipcMain.handle(IPC_CHANNELS.SKILLS_GET, async (_event, workspaceId: string) => {
+  // Get all skills for a workspace (and optionally project-level skills from workingDirectory)
+  ipcMain.handle(IPC_CHANNELS.SKILLS_GET, async (_event, workspaceId: string, workingDirectory?: string) => {
+    ipcLog.info(`SKILLS_GET: Loading skills for workspace: ${workspaceId}${workingDirectory ? `, workingDirectory: ${workingDirectory}` : ''}`)
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) {
       ipcLog.error(`SKILLS_GET: Workspace not found: ${workspaceId}`)
       return []
     }
-    const { loadWorkspaceSkills } = await import('@craft-agent/shared/skills')
-    const skills = loadWorkspaceSkills(workspace.rootPath)
+    const { loadAllSkills } = await import('@craft-agent/shared/skills')
+    const skills = loadAllSkills(workspace.rootPath, workingDirectory)
+    ipcLog.info(`SKILLS_GET: Loaded ${skills.length} skills from ${workspace.rootPath}`)
     return skills
   })
 
@@ -3423,6 +3675,18 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     setKeepAwakeWhileRunning(enabled)
     // Update the power manager's cached value and power state
     setKeepAwakeSetting(enabled)
+  })
+
+  // Get rich tool descriptions setting
+  ipcMain.handle(IPC_CHANNELS.APPEARANCE_GET_RICH_TOOL_DESCRIPTIONS, async () => {
+    const { getRichToolDescriptions } = await import('@craft-agent/shared/config/storage')
+    return getRichToolDescriptions()
+  })
+
+  // Set rich tool descriptions setting
+  ipcMain.handle(IPC_CHANNELS.APPEARANCE_SET_RICH_TOOL_DESCRIPTIONS, async (_event, enabled: boolean) => {
+    const { setRichToolDescriptions } = await import('@craft-agent/shared/config/storage')
+    setRichToolDescriptions(enabled)
   })
 
   // Update app badge count

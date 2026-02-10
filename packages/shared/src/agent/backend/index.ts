@@ -66,3 +66,4 @@ export {
 // Both agents implement AgentBackend directly
 export { ClaudeAgent } from '../claude-agent.ts';
 export { CodexAgent, CodexBackend } from '../codex-agent.ts';
+export { CopilotAgent, CopilotBackend } from '../copilot-agent.ts';

@@ -5,7 +5,8 @@
  * with StepFormLayout for the onboarding wizard context.
  */
 
-import { ExternalLink } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Check, ExternalLink } from "lucide-react"
 import type { ApiSetupMethod } from "./APISetupStep"
 import { StepFormLayout, BackButton, ContinueButton } from "./primitives"
 import {
@@ -29,6 +30,8 @@ interface CredentialsStepProps {
   isWaitingForCode?: boolean
   onSubmitAuthCode?: (code: string) => void
   onCancelOAuth?: () => void
+  // Device flow (Copilot)
+  copilotDeviceCode?: { userCode: string; verificationUri: string }
 }
 
 export function CredentialsStep({
@@ -41,12 +44,38 @@ export function CredentialsStep({
   isWaitingForCode,
   onSubmitAuthCode,
   onCancelOAuth,
+  copilotDeviceCode,
 }: CredentialsStepProps) {
   const isClaudeOAuth = apiSetupMethod === 'claude_oauth'
   const isChatGptOAuth = apiSetupMethod === 'chatgpt_oauth'
+  const isCopilotOAuth = apiSetupMethod === 'copilot_oauth'
   const isAnthropicApiKey = apiSetupMethod === 'anthropic_api_key'
   const isOpenAiApiKey = apiSetupMethod === 'openai_api_key'
   const isApiKey = isAnthropicApiKey || isOpenAiApiKey
+
+  // Copilot device code clipboard handling
+  const [copiedCode, setCopiedCode] = useState(false)
+
+  // Auto-copy device code to clipboard when it appears
+  useEffect(() => {
+    if (copilotDeviceCode?.userCode) {
+      navigator.clipboard.writeText(copilotDeviceCode.userCode).then(() => {
+        setCopiedCode(true)
+        setTimeout(() => setCopiedCode(false), 2000)
+      }).catch(() => {
+        // Clipboard write failed, user can still click to copy
+      })
+    }
+  }, [copilotDeviceCode?.userCode])
+
+  const handleCopyCode = () => {
+    if (copilotDeviceCode?.userCode) {
+      navigator.clipboard.writeText(copilotDeviceCode.userCode).then(() => {
+        setCopiedCode(true)
+        setTimeout(() => setCopiedCode(false), 2000)
+      })
+    }
+  }
 
   // --- ChatGPT OAuth flow (native browser OAuth) ---
   if (isChatGptOAuth) {
@@ -81,6 +110,70 @@ export function CredentialsStep({
           {status === 'success' && (
             <div className="rounded-lg bg-success/10 text-success text-sm p-3">
               Connected! Your ChatGPT subscription is ready.
+            </div>
+          )}
+        </div>
+      </StepFormLayout>
+    )
+  }
+
+  // --- Copilot OAuth flow (device flow) ---
+  if (isCopilotOAuth) {
+    return (
+      <StepFormLayout
+        title="Connect GitHub Copilot"
+        description="Use your GitHub Copilot subscription to power AI agents."
+        actions={
+          <>
+            <BackButton onClick={onBack} disabled={status === 'validating'} />
+            <ContinueButton
+              onClick={() => onStartOAuth?.()}
+              className="gap-2"
+              loading={status === 'validating'}
+              loadingText="Waiting for authorization..."
+            >
+              <ExternalLink className="size-4" />
+              Sign in with GitHub
+            </ContinueButton>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {copilotDeviceCode ? (
+            <div className="rounded-xl bg-foreground-2 p-4 text-sm space-y-3">
+              <p className="text-muted-foreground text-center">
+                Enter this code on GitHub to authorize:
+              </p>
+              <div className="flex flex-col items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyCode}
+                  className="text-2xl font-mono font-bold tracking-widest text-foreground px-4 py-2 rounded-lg bg-background border border-border hover:bg-foreground-2 transition-colors cursor-pointer"
+                >
+                  {copilotDeviceCode.userCode}
+                </button>
+                <span className={`text-xs text-muted-foreground flex items-center gap-1 transition-opacity ${copiedCode ? 'opacity-100' : 'opacity-0'}`}>
+                  <Check className="size-3" />
+                  Copied to clipboard
+                </span>
+              </div>
+              <p className="text-muted-foreground text-xs text-center">
+                A browser window should have opened to github.com/login/device
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-xl bg-foreground-2 p-4 text-sm text-muted-foreground text-center">
+              <p>Click the button above to sign in with your GitHub account.</p>
+            </div>
+          )}
+          {status === 'error' && errorMessage && (
+            <div className="rounded-lg bg-destructive/10 text-destructive text-sm p-3 text-center">
+              {errorMessage}
+            </div>
+          )}
+          {status === 'success' && (
+            <div className="rounded-lg bg-success/10 text-success text-sm p-3 text-center">
+              Connected! Your GitHub Copilot subscription is ready.
             </div>
           )}
         </div>
@@ -156,7 +249,7 @@ export function CredentialsStep({
   // Determine provider type and description based on selected method
   const providerType = isOpenAiApiKey ? 'openai' : 'anthropic'
   const apiKeyDescription = isOpenAiApiKey
-    ? "Enter your OpenAI API key. Optionally configure OpenRouter or Vercel AI Gateway."
+    ? "Enter your OpenAI API key."
     : "Enter your API key. Optionally configure a custom endpoint for OpenRouter, Ollama, or compatible APIs."
 
   return (

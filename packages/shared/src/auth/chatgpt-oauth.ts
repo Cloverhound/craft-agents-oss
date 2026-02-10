@@ -411,3 +411,57 @@ export function cancelChatGptOAuth(): void {
   stopCallbackServer();
   clearOAuthState();
 }
+
+/**
+ * Exchange an idToken for an OpenAI API key using the token-exchange grant.
+ *
+ * This implements RFC 8693 Token Exchange to convert a ChatGPT OAuth idToken
+ * into a first-class OpenAI API key that can be used with the standard OpenAI SDK.
+ *
+ * @param idToken - The JWT id_token from ChatGPT OAuth
+ * @returns An OpenAI API key string
+ */
+export async function exchangeIdTokenForApiKey(idToken: string): Promise<string> {
+  const params = new URLSearchParams({
+    grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+    client_id: CLIENT_ID,
+    subject_token: idToken,
+    subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
+    requested_token: 'openai-api-key',
+  });
+
+  const response = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body: params.toString(),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let errorMessage: string;
+    try {
+      const errorJson = JSON.parse(errorText);
+      // Handle both string and object error formats
+      const errorDesc = errorJson.error_description;
+      const errorCode = typeof errorJson.error === 'string' ? errorJson.error : JSON.stringify(errorJson.error);
+      errorMessage = errorDesc || errorCode || errorText;
+    } catch {
+      errorMessage = errorText;
+    }
+    throw new Error(`Token exchange failed: ${response.status} - ${errorMessage}`);
+  }
+
+  const data = (await response.json()) as {
+    access_token?: string;
+    token_type?: string;
+  };
+
+  if (!data.access_token) {
+    throw new Error('Token exchange succeeded but no access_token returned');
+  }
+
+  return data.access_token;
+}

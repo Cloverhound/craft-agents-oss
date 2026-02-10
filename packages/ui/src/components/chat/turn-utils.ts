@@ -225,6 +225,8 @@ export function shouldShowThinkingIndicator(phase: TurnPhase, isBuffering: boole
 
 /** Convert tool status from message to ActivityStatus */
 function getToolStatus(message: Message): ActivityStatus {
+  // response_too_large is success (data was saved, just too large for inline display)
+  if (message.errorCode === 'response_too_large') return 'completed'
   if (message.isError) return 'error'
   // Check explicit toolStatus first (set by tool_result handler)
   if (message.toolStatus === 'completed') return 'completed'

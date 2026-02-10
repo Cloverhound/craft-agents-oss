@@ -17,6 +17,7 @@
 import type { AgentBackend, BackendConfig, AgentProvider, LlmProviderType, LlmAuthType } from './types.ts';
 import { ClaudeAgent } from '../claude-agent.ts';
 import { CodexAgent } from '../codex-agent.ts';
+import { CopilotAgent } from '../copilot-agent.ts';
 import {
   getLlmConnection,
   getDefaultLlmConnection,
@@ -85,6 +86,11 @@ export function createBackend(config: BackendConfig): AgentBackend {
       // Auth is handled via ChatGPT Plus OAuth (native flow)
       return new CodexAgent(config);
 
+    case 'copilot':
+      // CopilotAgent implements AgentBackend directly
+      // Auth is handled via GitHub OAuth
+      return new CopilotAgent(config);
+
     default:
       throw new Error(`Unknown provider: ${config.provider}`);
   }
@@ -102,7 +108,7 @@ export const createAgent = createBackend;
  * @returns Array of provider identifiers that have working implementations
  */
 export function getAvailableProviders(): AgentProvider[] {
-  return ['anthropic', 'openai'];
+  return ['anthropic', 'openai', 'copilot'];
 }
 
 /**
@@ -142,6 +148,10 @@ export function providerTypeToAgentProvider(providerType: LlmProviderType): Agen
     case 'openai':
     case 'openai_compat':
       return 'openai';
+
+    // GitHub Copilot backend
+    case 'copilot':
+      return 'copilot';
 
     default:
       // Exhaustive check

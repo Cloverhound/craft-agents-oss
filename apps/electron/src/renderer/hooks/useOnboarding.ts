@@ -27,6 +27,8 @@ interface UseOnboardingOptions {
   initialSetupNeeds?: SetupNeeds
   /** Start the wizard at a specific step (default: 'welcome') */
   initialStep?: OnboardingStep
+  /** Pre-select an API setup method (useful when editing an existing connection) */
+  initialApiSetupMethod?: ApiSetupMethod
   /** Called when user goes back from the initial step (dismisses the wizard) */
   onDismiss?: () => void
   /** Called immediately after config is saved to disk (before wizard closes).
@@ -53,6 +55,9 @@ interface UseOnboardingReturn {
   isWaitingForCode: boolean
   handleSubmitAuthCode: (code: string) => void
   handleCancelOAuth: () => void
+
+  // Copilot device code (displayed during device flow)
+  copilotDeviceCode?: { userCode: string; verificationUri: string }
 
   // Git Bash (Windows)
   handleBrowseGitBash: () => Promise<string | null>
@@ -100,6 +105,11 @@ function apiSetupMethodToConnectionSetup(
         defaultModel: options.connectionDefaultModel,
         models: options.models,
       }
+    case 'copilot_oauth':
+      return {
+        slug: 'copilot',
+        credential: options.credential,
+      }
   }
 }
 
@@ -107,6 +117,7 @@ export function useOnboarding({
   onComplete,
   initialSetupNeeds,
   initialStep = 'welcome',
+  initialApiSetupMethod,
   onDismiss,
   onConfigSaved,
 }: UseOnboardingOptions): UseOnboardingReturn {
@@ -116,7 +127,7 @@ export function useOnboarding({
     loginStatus: 'idle',
     credentialStatus: 'idle',
     completionStatus: 'saving',
-    apiSetupMethod: null,
+    apiSetupMethod: initialApiSetupMethod ?? null,
     isExistingUser: initialSetupNeeds?.needsBillingConfig ?? false,
     gitBashStatus: undefined,
     isRecheckingGitBash: false,
@@ -320,6 +331,9 @@ export function useOnboarding({
   // Two-step OAuth flow state
   const [isWaitingForCode, setIsWaitingForCode] = useState(false)
 
+  // Copilot device code (displayed during device flow)
+  const [copilotDeviceCode, setCopilotDeviceCode] = useState<{ userCode: string; verificationUri: string } | undefined>()
+
   // Start OAuth flow (Claude or ChatGPT depending on selected method)
   const handleStartOAuth = useCallback(async (methodOverride?: ApiSetupMethod) => {
     const effectiveMethod = methodOverride ?? state.apiSetupMethod
@@ -365,6 +379,40 @@ export function useOnboarding({
             credentialStatus: 'error',
             errorMessage: result.error || 'ChatGPT authentication failed',
           }))
+        }
+        return
+      }
+
+      // Copilot OAuth (device flow — polls for token after user enters code on GitHub)
+      if (effectiveMethod === 'copilot_oauth') {
+        const connectionSlug = apiSetupMethodToConnectionSetup(effectiveMethod, {}).slug
+
+        // Subscribe to device code event before starting the flow
+        const cleanup = window.electronAPI.onCopilotDeviceCode((data) => {
+          setCopilotDeviceCode(data)
+        })
+
+        try {
+          const result = await window.electronAPI.startCopilotOAuth(connectionSlug)
+
+          if (result.success) {
+            // Tokens captured, save config and complete
+            await handleSaveConfig(undefined)
+            setState(s => ({
+              ...s,
+              credentialStatus: 'success',
+              step: 'complete',
+            }))
+          } else {
+            setState(s => ({
+              ...s,
+              credentialStatus: 'error',
+              errorMessage: result.error || 'GitHub authentication failed',
+            }))
+          }
+        } finally {
+          cleanup()
+          setCopilotDeviceCode(undefined)
         }
         return
       }
@@ -512,7 +560,7 @@ export function useOnboarding({
       loginStatus: 'idle',
       credentialStatus: 'idle',
       completionStatus: 'saving',
-      apiSetupMethod: null,
+      apiSetupMethod: initialApiSetupMethod ?? null,
       isExistingUser: false,
       errorMessage: undefined,
     })
@@ -521,7 +569,7 @@ export function useOnboarding({
     window.electronAPI.clearClaudeOAuthState().catch(() => {
       // Ignore errors - state may not exist
     })
-  }, [])
+  }, [initialStep, initialApiSetupMethod])
 
   return {
     state,
@@ -534,6 +582,8 @@ export function useOnboarding({
     isWaitingForCode,
     handleSubmitAuthCode,
     handleCancelOAuth,
+    // Copilot device code
+    copilotDeviceCode,
     // Git Bash (Windows)
     handleBrowseGitBash,
     handleUseGitBashPath,

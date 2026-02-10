@@ -54,6 +54,8 @@ export interface SessionMeta {
   isRegeneratingTitle?: boolean
   /** Model override for this session */
   model?: string
+  /** LLM connection slug for this session */
+  llmConnection?: string
   /** Token usage stats (from JSONL header, available without loading messages) */
   tokenUsage?: {
     inputTokens: number
@@ -128,6 +130,7 @@ export function extractSessionMeta(session: Session): SessionMeta {
     // Fields needed by view expressions (messageCount, model, createdAt, tokenUsage)
     messageCount: session.messageCount ?? session.messages?.length ?? 0,
     model: session.model,
+    llmConnection: session.llmConnection,
     createdAt: session.createdAt,
     tokenUsage: session.tokenUsage,
     // Hidden sessions (e.g., mini edit sessions in EditPopover)
@@ -565,4 +568,10 @@ export const backgroundTasksAtomFamily = atomFamily(
   (_sessionId: string) => atom<BackgroundTask[]>([]),
   (a, b) => a === b
 )
+
+/**
+ * Window's current workspace ID — shared between Root (ThemeProvider) and App.
+ * Written by App on workspace switch, read by Root to keep the theme in sync.
+ */
+export const windowWorkspaceIdAtom = atom<string | null>(null)
 

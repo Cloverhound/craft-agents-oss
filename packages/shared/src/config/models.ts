@@ -17,7 +17,7 @@
 /**
  * Provider identifier for AI backends.
  */
-export type ModelProvider = 'anthropic' | 'openai';
+export type ModelProvider = 'anthropic' | 'openai' | 'copilot';
 
 /**
  * Full model definition with capabilities and costs.
@@ -36,6 +36,8 @@ export interface ModelDefinition {
   provider: ModelProvider;
   /** Maximum context window in tokens */
   contextWindow: number;
+  /** Whether this model supports thinking/reasoning effort. Defaults to true when undefined. */
+  supportsThinking?: boolean;
 }
 
 // ============================================
@@ -55,6 +57,14 @@ export const MODEL_REGISTRY: ModelDefinition[] = [
     name: 'Opus 4.6',
     shortName: 'Opus',
     description: 'Most capable for complex work',
+    provider: 'anthropic',
+    contextWindow: 200_000,
+  },
+  {
+    id: 'claude-opus-4-5-20251101',
+    name: 'Opus 4.5',
+    shortName: 'Opus 4.5',
+    description: 'Previous generation flagship model',
     provider: 'anthropic',
     contextWindow: 200_000,
   },
@@ -95,6 +105,12 @@ export const MODEL_REGISTRY: ModelDefinition[] = [
     provider: 'openai',
     contextWindow: 128_000,
   },
+
+  // ----------------------------------------
+  // GitHub Copilot Models (via Copilot SDK)
+  // No hardcoded entries — models are discovered at runtime via client.listModels()
+  // and stored on the connection. See fetchAndStoreCopilotModels() in ipc.ts.
+  // ----------------------------------------
 ];
 
 // ============================================
@@ -113,6 +129,9 @@ export const ANTHROPIC_MODELS = getModelsByProvider('anthropic');
 
 /** All OpenAI/Codex models */
 export const OPENAI_MODELS = getModelsByProvider('openai');
+
+/** All GitHub Copilot models */
+export const COPILOT_MODELS = getModelsByProvider('copilot');
 
 /**
  * Legacy compatibility export.
@@ -143,10 +162,13 @@ export function getModelIdByShortName(shortName: string): string {
 // ============================================
 
 /** Default model for Anthropic connections (used when creating/backfilling connections) */
-export const DEFAULT_MODEL = getModelIdByShortName('Sonnet');
+export const DEFAULT_MODEL = getModelIdByShortName('Opus');
 
 /** Default model for Codex/OpenAI connections (used when creating/backfilling connections) */
 export const DEFAULT_CODEX_MODEL = getModelIdByShortName('Codex');
+
+/** Default model for Copilot connections — no hardcoded default; models come from listModels() */
+export const DEFAULT_COPILOT_MODEL: string | undefined = undefined;
 
 // ============================================
 // UTILITY MODELS
@@ -191,8 +213,18 @@ export function getModelById(modelId: string): ModelDefinition | undefined {
 export function getModelDisplayName(modelId: string): string {
   const model = getModelById(modelId);
   if (model) return model.name;
-  // Fallback: strip prefix and date suffix
-  return modelId.replace('claude-', '').replace(/-\d{8}$/, '');
+  // Fallback: strip prefix and date suffix, format nicely
+  // e.g., "claude-opus-4-5-20251101" → "Opus 4.5"
+  const stripped = modelId
+    .replace('claude-', '')
+    .replace(/-\d{8}$/, '');  // Remove date suffix
+  // Split on dashes, capitalize first part, join version parts with dots
+  const parts = stripped.split('-');
+  const first = parts[0];
+  if (!first) return modelId;
+  const name = first.charAt(0).toUpperCase() + first.slice(1);
+  const version = parts.slice(1).join('.');
+  return version ? `${name} ${version}` : name;
 }
 
 /**
@@ -241,6 +273,14 @@ export function isClaudeModel(modelId: string): boolean {
 export function isCodexModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   return lower.includes('codex');
+}
+
+/**
+ * Check if a model ID refers to a Copilot model.
+ */
+export function isCopilotModel(modelId: string): boolean {
+  const model = getModelById(modelId);
+  return model?.provider === 'copilot';
 }
 
 /**

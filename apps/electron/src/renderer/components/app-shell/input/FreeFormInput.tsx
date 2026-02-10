@@ -10,12 +10,12 @@ import {
   DatabaseZap,
   ChevronDown,
   Loader2,
-  Lock,
   AlertCircle,
 } from 'lucide-react'
 import { Icon_Home, Icon_Folder } from '@craft-agent/ui'
 
 import * as storage from '@/lib/local-storage'
+import { extractWorkspaceSlug } from '@craft-agent/shared/utils/workspace'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -55,11 +55,12 @@ import { cn } from '@/lib/utils'
 import { isMac, PATH_SEP, getPathBasename } from '@/lib/platform'
 import { applySmartTypography } from '@/lib/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
-import { ANTHROPIC_MODELS, getModelShortName, getModelContextWindow, isCodexModel } from '@config/models'
+import { ANTHROPIC_MODELS, getModelShortName, getModelDisplayName, getModelContextWindow, isCodexModel, isCopilotModel } from '@config/models'
 import { resolveEffectiveConnectionSlug, isCompatProvider } from '@config/llm-connections'
 import { useOptionalAppShellContext } from '@/context/AppShellContext'
 import { EditPopover, getEditConfig } from '@/components/ui/EditPopover'
 import { SourceAvatar } from '@/components/ui/source-avatar'
+import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
 import { FreeFormInputContextBadge } from './FreeFormInputContextBadge'
 import type { FileAttachment, LoadedSource, LoadedSkill } from '../../../../shared/types'
 import type { PermissionMode } from '@craft-agent/shared/agent/modes'
@@ -289,12 +290,32 @@ export function FreeFormInput({
 
   const availableThinkingLevels = THINKING_LEVELS
 
+  // Disable thinking selector when the current model explicitly doesn't support it
+  const thinkingDisabled = React.useMemo(() => {
+    const model = availableModels.find(m => typeof m !== 'string' && m.id === currentModel)
+    return typeof model !== 'string' && model?.supportsThinking === false
+  }, [availableModels, currentModel])
+
+  // Get display name for current model (full name, not short name)
+  const currentModelDisplayName = React.useMemo(() => {
+    const modelToDisplay = connectionDefaultModel ?? currentModel
+    const model = availableModels.find(m =>
+      typeof m === 'string' ? m === modelToDisplay : m.id === modelToDisplay
+    )
+    if (!model) {
+      // Fallback: use helper function to format unknown model IDs nicely
+      return getModelDisplayName(modelToDisplay)
+    }
+    return typeof model === 'string' ? model : model.name
+  }, [availableModels, currentModel, connectionDefaultModel])
+
   // Group connections by provider type for hierarchical dropdown
   // Each provider (Anthropic, OpenAI) can have multiple connections (API Key, Claude Max, etc.)
   const connectionsByProvider = React.useMemo(() => {
     const groups: Record<string, typeof llmConnections> = {
       'Anthropic': [],
       'OpenAI': [],
+      'GitHub Copilot': [],
     }
     for (const conn of llmConnections) {
       const provider = conn.providerType || 'anthropic'
@@ -303,6 +324,8 @@ export function FreeFormInput({
         groups['Anthropic'].push(conn)
       } else if (provider === 'openai' || provider === 'openai_compat') {
         groups['OpenAI'].push(conn)
+      } else if (provider === 'copilot') {
+        groups['GitHub Copilot'].push(conn)
       }
     }
     // Return only non-empty groups
@@ -326,6 +349,7 @@ export function FreeFormInput({
     return llmConnections.find(c => c.slug === effectiveConnection) ?? null
   }, [llmConnections, effectiveConnection])
 
+
   // Access todoStates and onTodoStateChange from context for the # menu state picker
   const todoStates = appShellCtx?.todoStates ?? []
   const onTodoStateChange = appShellCtx?.onTodoStateChange
@@ -334,6 +358,13 @@ export function FreeFormInput({
     if (!appShellCtx || !workspaceId) return null
     return appShellCtx.workspaces.find(w => w.id === workspaceId)?.rootPath ?? null
   }, [appShellCtx, workspaceId])
+
+  // Compute workspace slug from rootPath for SDK skill qualification
+  // SDK expects "workspaceSlug:skillSlug" format, NOT UUID
+  const workspaceSlug = React.useMemo(() => {
+    if (!workspaceRootPath) return workspaceId // Fallback to ID if no path
+    return extractWorkspaceSlug(workspaceRootPath, workspaceId ?? '')
+  }, [workspaceRootPath, workspaceId])
 
   // Shuffle placeholder order once per mount so each session feels fresh
   const shuffledPlaceholder = React.useMemo(
@@ -773,7 +804,8 @@ export function FreeFormInput({
     sources,
     basePath: workingDirectory,
     onSelect: handleMentionSelect,
-    workspaceId,
+    // Use workspace slug (not UUID) for SDK skill qualification
+    workspaceId: workspaceSlug,
   })
 
   // Inline label menu hook (for #labels)
@@ -1142,7 +1174,7 @@ export function FreeFormInput({
     // - 'cmd-enter': ⌘/Ctrl+Enter sends (Enter for newline)
     if (sendMessageKey === 'enter') {
       // Enter sends, Shift+Enter adds newline
-      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.nativeEvent.isComposing) {
         e.preventDefault()
         submitMessage()
       }
@@ -1389,7 +1421,7 @@ export function FreeFormInput({
           disabled={disabled}
           skills={skills}
           sources={sources}
-          workspaceId={workspaceId}
+          workspaceId={workspaceSlug}
           className="pl-5 pr-4 pt-4 pb-3 overflow-y-auto min-h-[88px]"
           style={{ maxHeight: inputMaxHeight }}
           data-tutorial="chat-input"
@@ -1613,7 +1645,7 @@ export function FreeFormInput({
                     className={cn(
                       "inline-flex items-center h-7 px-1.5 gap-0.5 text-[13px] shrink-0 rounded-[6px] hover:bg-foreground/5 transition-colors select-none",
                       modelDropdownOpen && "bg-foreground/5",
-                      connectionUnavailable && "text-destructive"
+                      connectionUnavailable && "text-destructive",
                     )}
                   >
                     {connectionUnavailable ? (
@@ -1623,14 +1655,17 @@ export function FreeFormInput({
                       </>
                     ) : (
                       <>
-                        {getModelShortName(connectionDefaultModel ?? currentModel)}
+                        {effectiveConnectionDetails && llmConnections.length > 1 && storage.get(storage.KEYS.showConnectionIcons, true) && <ConnectionIcon connection={effectiveConnectionDetails} size={14} showTooltip />}
+                        {currentModelDisplayName}
                         {!connectionDefaultModel && <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />}
                       </>
                     )}
                   </button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent side="top">Model</TooltipContent>
+              <TooltipContent side="top">
+Model
+              </TooltipContent>
             </Tooltip>
             <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[260px]">
               {/* Connection unavailable message */}
@@ -1674,7 +1709,8 @@ export function FreeFormInput({
                             )}
                           >
                             <div className="text-left flex-1">
-                              <div className="font-medium text-sm flex items-center gap-2">
+                              <div className="font-medium text-sm flex items-center gap-1.5">
+                                <ConnectionIcon connection={conn} size={14} />
                                 {conn.name}
                                 {isCurrentConnection && <Check className="h-3 w-3 text-foreground" />}
                               </div>
@@ -1723,11 +1759,10 @@ export function FreeFormInput({
               ) : (
                 /* Flat model list (single connection or session started) */
                 <>
-                  {/* Lock indicator showing which connection is being used */}
+                  {/* Indicator showing which connection is being used */}
                   {!isEmptySession && currentConnectionDetails && llmConnections.length > 1 && (
                     <>
-                      <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground select-none">
-                        <Lock className="h-3 w-3" />
+                      <div className="flex items-center gap-2 px-2 py-1.5 text-xs select-none text-muted-foreground">
                         <span>Using {currentConnectionDetails.name}</span>
                       </div>
                       <StyledDropdownMenuSeparator className="my-1" />
@@ -1767,10 +1802,10 @@ export function FreeFormInput({
                   <StyledDropdownMenuSeparator className="my-1" />
 
                   <DropdownMenuSub>
-                    <StyledDropdownMenuSubTrigger className="flex items-center justify-between px-2 py-2 rounded-lg">
+                    <StyledDropdownMenuSubTrigger disabled={thinkingDisabled} className={cn("flex items-center justify-between px-2 py-2 rounded-lg", thinkingDisabled && "opacity-50 cursor-not-allowed")}>
                       <div className="text-left flex-1">
                         <div className="font-medium text-sm">{getThinkingLevelName(thinkingLevel)}</div>
-                        <div className="text-xs text-muted-foreground">Extended reasoning depth</div>
+                        <div className="text-xs text-muted-foreground">{thinkingDisabled ? 'Not supported by this model' : 'Extended reasoning depth'}</div>
                       </div>
                     </StyledDropdownMenuSubTrigger>
                     <StyledDropdownMenuSubContent className="min-w-[220px]">
@@ -1832,7 +1867,8 @@ export function FreeFormInput({
               ? Math.min(99, Math.round((contextStatus.inputTokens / compactionThreshold) * 100))
               : null
             // Show badge when >= 80% of compaction threshold AND not currently compacting
-            const showWarning = usagePercent !== null && usagePercent >= 80 && !contextStatus?.isCompacting && !isCodexModel(currentModel)
+            // Hide for Codex and Copilot models which don't support context compaction
+            const showWarning = usagePercent !== null && usagePercent >= 80 && !contextStatus?.isCompacting && !isCodexModel(currentModel) && !isCopilotModel(currentModel)
 
             if (!showWarning) return null
 
@@ -1843,36 +1879,28 @@ export function FreeFormInput({
             }
 
             return (
-              <DropdownMenu>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        disabled={isProcessing}
-                        className="inline-flex items-center h-6 px-2 text-[12px] font-medium bg-info/10 rounded-[6px] shadow-tinted select-none cursor-pointer hover:bg-info/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        style={{
-                          '--shadow-color': 'var(--info-rgb)',
-                          color: 'color-mix(in oklab, var(--info) 30%, var(--foreground))',
-                        } as React.CSSProperties}
-                      >
-                        {usagePercent}%
-                      </button>
-                    </DropdownMenuTrigger>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    {usagePercent}% context used
-                  </TooltipContent>
-                </Tooltip>
-                <StyledDropdownMenuContent align="center" side="top" sideOffset={8}>
-                  <StyledDropdownMenuItem
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
                     onClick={handleCompactClick}
                     disabled={isProcessing}
+                    className="inline-flex items-center h-6 px-2 text-[12px] font-medium bg-info/10 rounded-[6px] shadow-tinted select-none cursor-pointer hover:bg-info/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{
+                      '--shadow-color': 'var(--info-rgb)',
+                      color: 'color-mix(in oklab, var(--info) 30%, var(--foreground))',
+                    } as React.CSSProperties}
                   >
-                    Compact
-                  </StyledDropdownMenuItem>
-                </StyledDropdownMenuContent>
-              </DropdownMenu>
+                    {usagePercent}%
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {isProcessing
+                    ? `${usagePercent}% context used — wait for current operation`
+                    : `${usagePercent}% context used — click to compact`
+                  }
+                </TooltipContent>
+              </Tooltip>
             )
           })()}
 

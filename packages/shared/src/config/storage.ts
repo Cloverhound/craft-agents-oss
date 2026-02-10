@@ -68,6 +68,8 @@ export interface StoredConfig {
   openaiVariant?: 'responses' | 'codex-sdk';
   // Power settings
   keepAwakeWhileRunning?: boolean;  // Prevent screen sleep while sessions are running (default: false)
+  // Tool metadata
+  richToolDescriptions?: boolean;  // Add intent/action metadata to all tool calls (default: true)
 }
 
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
@@ -314,6 +316,29 @@ export function setKeepAwakeWhileRunning(enabled: boolean): void {
   const config = loadStoredConfig();
   if (!config) return;
   config.keepAwakeWhileRunning = enabled;
+  saveConfig(config);
+}
+
+/**
+ * Get whether rich tool descriptions are enabled.
+ * When enabled, all tool calls include intent and display name metadata.
+ * Defaults to true if not set.
+ */
+export function getRichToolDescriptions(): boolean {
+  const config = loadStoredConfig();
+  if (config?.richToolDescriptions !== undefined) {
+    return config.richToolDescriptions;
+  }
+  return true;
+}
+
+/**
+ * Set whether rich tool descriptions are enabled.
+ */
+export function setRichToolDescriptions(enabled: boolean): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  config.richToolDescriptions = enabled;
   saveConfig(config);
 }
 
@@ -1190,6 +1215,71 @@ function backfillAllConnectionModels(config: StoredConfig): boolean {
 }
 
 /**
+ * Migrate Opus 4.5 to Opus 4.6 for direct Anthropic connections (API key or OAuth).
+ * Only applies to anthropic provider type (not compat), as third-party providers
+ * like OpenRouter may not support the new model ID yet.
+ */
+function migrateOpus45ToOpus46(config: StoredConfig): boolean {
+  if (!config.llmConnections) return false;
+
+  const OPUS_45_ID = 'claude-opus-4-5-20251101';
+  const OPUS_46_ID = 'claude-opus-4-6';
+
+  let changed = false;
+
+  for (const connection of config.llmConnections) {
+    // Only migrate direct Anthropic connections (not compat/third-party)
+    if (connection.providerType !== 'anthropic') continue;
+
+    // Migrate defaultModel
+    if (connection.defaultModel === OPUS_45_ID) {
+      connection.defaultModel = OPUS_46_ID;
+      changed = true;
+    }
+
+    // Migrate models array
+    if (connection.models && Array.isArray(connection.models)) {
+      for (let i = 0; i < connection.models.length; i++) {
+        const model = connection.models[i];
+        if (typeof model === 'string' && model === OPUS_45_ID) {
+          connection.models[i] = OPUS_46_ID;
+          changed = true;
+        } else if (typeof model === 'object' && model.id === OPUS_45_ID) {
+          model.id = OPUS_46_ID;
+          if (model.name?.includes('4.5')) {
+            model.name = model.name.replace('4.5', '4.6');
+          }
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return changed;
+}
+
+/**
+ * Migrate Opus 4.5 to Opus 4.6 in workspace default models.
+ * Iterates over all workspaces and updates defaults.model if it's Opus 4.5.
+ */
+function migrateWorkspaceOpus45ToOpus46(config: StoredConfig): void {
+  if (!config.workspaces) return;
+
+  const OPUS_45_ID = 'claude-opus-4-5-20251101';
+  const OPUS_46_ID = 'claude-opus-4-6';
+
+  for (const workspace of config.workspaces) {
+    const wsConfig = loadWorkspaceConfig(workspace.rootPath);
+    if (!wsConfig?.defaults?.model) continue;
+
+    if (wsConfig.defaults.model === OPUS_45_ID) {
+      wsConfig.defaults.model = OPUS_46_ID;
+      saveWorkspaceConfig(workspace.rootPath, wsConfig);
+    }
+  }
+}
+
+/**
  * Migrate modelDefaults onto connection.defaultModel, then delete modelDefaults.
  * If user had set modelDefaults.anthropic, apply it to the default anthropic connection.
  * Same for openai. Then remove modelDefaults from config.
@@ -1339,6 +1429,13 @@ export function migrateLegacyLlmConnectionsConfig(): void {
     if (migrateModelDefaultsToConnections(config)) {
       needsSave = true;
     }
+    // Phase 1d: Migrate Opus 4.5 → Opus 4.6 for direct Anthropic connections
+    if (migrateOpus45ToOpus46(config)) {
+      needsSave = true;
+    }
+    // Phase 1e: Migrate Opus 4.5 → Opus 4.6 in workspace default models
+    migrateWorkspaceOpus45ToOpus46(config);
+
     if (needsSave) {
       saveConfig(config);
     }

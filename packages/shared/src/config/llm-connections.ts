@@ -27,6 +27,7 @@ import {
  * - 'openai_compat': OpenAI-format compatible endpoints (Ollama, OpenRouter, etc.)
  * - 'bedrock': AWS Bedrock (Claude models via AWS)
  * - 'vertex': Google Vertex AI (Claude models via GCP)
+ * - 'copilot': GitHub Copilot (via @github/copilot-sdk)
  */
 export type LlmProviderType =
   | 'anthropic'
@@ -34,7 +35,8 @@ export type LlmProviderType =
   | 'openai'
   | 'openai_compat'
   | 'bedrock'
-  | 'vertex';
+  | 'vertex'
+  | 'copilot';
 
 /**
  * @deprecated Use LlmProviderType instead. Kept for migration compatibility.
@@ -309,6 +311,15 @@ export function isOpenAIProvider(providerType: LlmProviderType): boolean {
 }
 
 /**
+ * Check if a provider type uses GitHub Copilot.
+ * @param providerType - Provider type to check
+ * @returns true if this provider uses the Copilot SDK
+ */
+export function isCopilotProvider(providerType: LlmProviderType): boolean {
+  return providerType === 'copilot';
+}
+
+/**
  * Get the default model list for a provider type from the registry.
  * For *_compat providers, returns empty array - those should use connection.models instead.
  *
@@ -324,6 +335,10 @@ export function getModelsForProviderType(providerType: LlmProviderType): ModelDe
   // Standard providers use registry models
   if (providerType === 'openai') {
     return OPENAI_MODELS;
+  }
+
+  if (providerType === 'copilot') {
+    return []; // Copilot models are dynamic — fetched via listModels(), no hardcoded fallbacks
   }
 
   // Anthropic, Bedrock, Vertex all use Claude models
@@ -346,6 +361,7 @@ export function getDefaultModelsForConnection(providerType: LlmProviderType): Ar
     'openai/gpt-5.1-codex-mini',
   ];
   if (providerType === 'openai') return OPENAI_MODELS;
+  if (providerType === 'copilot') return []; // Dynamic — fetched via listModels()
   if (providerType === 'anthropic_compat') return [
     'anthropic/claude-opus-4.6',
     'anthropic/claude-sonnet-4.5',
@@ -440,6 +456,7 @@ export function isValidProviderAuthCombination(
     openai_compat: ['api_key_with_endpoint', 'none'],
     bedrock: ['bearer_token', 'iam_credentials', 'environment'],
     vertex: ['oauth', 'service_account_file', 'environment'],
+    copilot: ['oauth'],
   };
 
   return validCombinations[providerType]?.includes(authType) ?? false;

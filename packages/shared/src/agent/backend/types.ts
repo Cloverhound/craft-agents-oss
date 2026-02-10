@@ -290,6 +290,7 @@ export interface BackendConfig {
    * Determines which agent class is instantiated:
    * - 'anthropic' → ClaudeAgent (Anthropic SDK)
    * - 'openai' → CodexAgent (OpenAI via app-server)
+   * - 'copilot' → CopilotAgent (GitHub Copilot via @github/copilot-sdk)
    */
   provider: AgentProvider;
 
@@ -346,6 +347,46 @@ export interface BackendConfig {
    * Typically set to: `{sessionPath}/.codex-home`
    */
   codexHome?: string;
+
+  /**
+   * Path to the @github/copilot CLI entry point (CopilotAgent only).
+   * Required because esbuild bundles break `import.meta.resolve()` used by the SDK.
+   * Resolved in the Electron main process and passed here.
+   */
+  copilotCliPath?: string;
+
+  /**
+   * Path to the Copilot network interceptor (CopilotAgent only).
+   * Loaded via NODE_OPTIONS="--require ..." into the Copilot CLI subprocess.
+   * Intercepts fetch() to inject tool metadata and capture it from responses.
+   */
+  copilotInterceptorPath?: string;
+
+  /**
+   * Per-session config directory for Copilot SDK (CopilotAgent only).
+   * When set, the Copilot CLI will use this directory for storing config and state.
+   */
+  copilotConfigDir?: string;
+
+  /**
+   * Path to session-mcp-server executable (stdio MCP server for session-scoped tools).
+   * Provides SubmitPlan, config_validate, source_test, source_oauth_trigger, etc.
+   * Used by Codex (via config.toml) and Copilot (via mcpServers runtime config).
+   */
+  sessionServerPath?: string;
+
+  /**
+   * Path to Node/Bun executable for spawning MCP server subprocesses.
+   * Used to run session-mcp-server and bridge-mcp-server.
+   */
+  nodePath?: string;
+
+  /**
+   * Path to bridge-mcp-server executable (stdio MCP server for API sources).
+   * Bridges REST API sources to the agent via MCP protocol.
+   * Used by Codex (via config.toml) and Copilot (via mcpServers runtime config).
+   */
+  bridgeServerPath?: string;
 
   /** Callback when SDK session ID is captured/updated */
   onSdkSessionIdUpdate?: (sdkSessionId: string) => void;

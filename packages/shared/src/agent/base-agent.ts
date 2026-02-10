@@ -13,6 +13,9 @@
  * Provider-specific behavior (chat, abort, capabilities) is implemented in subclasses.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import type { AgentEvent } from '@craft-agent/core/types';
 import type { FileAttachment } from '../utils/files.ts';
 import type { ThinkingLevel } from './thinking-levels.ts';
@@ -32,6 +35,7 @@ import type {
   BackendConfig,
 } from './backend/types.ts';
 import { AbortReason } from './backend/types.ts';
+import type { AuthRequest } from './session-scoped-tools.ts';
 import type { Workspace } from '../config/storage.ts';
 
 // Core modules
@@ -40,10 +44,21 @@ import { SourceManager } from './core/source-manager.ts';
 import { PromptBuilder } from './core/prompt-builder.ts';
 import { PathProcessor } from './core/path-processor.ts';
 import { ConfigWatcherManager, type ConfigWatcherManagerCallbacks } from './core/config-watcher-manager.ts';
-import { PlanningAdvisor } from './core/planning-advisor.ts';
 import { UsageTracker, type UsageUpdate } from './core/usage-tracker.ts';
-import { getSessionPlansPath } from '../sessions/storage.ts';
+import { getSessionPlansPath, getSessionDataPath } from '../sessions/storage.ts';
 import { getMiniAgentSystemPrompt } from '../prompts/system.ts';
+import { buildTitlePrompt, buildRegenerateTitlePrompt, validateTitle } from '../utils/title-generator.ts';
+import {
+  handleLargeResponse,
+  estimateTokens,
+  TOKEN_LIMIT,
+  type SummarizationContext,
+  type HandleLargeResponseResult,
+} from '../utils/large-response.ts';
+
+// Skill extraction for Codex/Copilot backends (Claude uses native SDK Skill tool)
+import { parseMentions, stripAllMentions } from '../mentions/index.ts';
+import { loadWorkspaceSkills } from '../skills/storage.ts';
 
 // ============================================================
 // Mini Agent Configuration
@@ -88,6 +103,7 @@ export const MINI_AGENT_MCP_KEYS = ['session', 'craft-agents-docs'] as const;
  * - capabilities(): Provider-specific capabilities
  * - respondToPermission(): Provider-specific permission resolution
  * - destroy(): Provider-specific cleanup
+ * - runMiniCompletion(): Simple text completion using backend's auth
  */
 export abstract class BaseAgent implements AgentBackend {
   // ============================================================
@@ -112,7 +128,6 @@ export abstract class BaseAgent implements AgentBackend {
   protected promptBuilder: PromptBuilder;
   protected pathProcessor: PathProcessor;
   protected configWatcherManager: ConfigWatcherManager | null = null;
-  protected planningAdvisor: PlanningAdvisor;
   protected usageTracker: UsageTracker;
 
   // ============================================================
@@ -153,6 +168,7 @@ export abstract class BaseAgent implements AgentBackend {
       sessionId: this._sessionId,
       workingDirectory: this.workingDirectory,
       plansFolderPath: getSessionPlansPath(config.workspace.rootPath, this._sessionId),
+      dataFolderPath: getSessionDataPath(config.workspace.rootPath, this._sessionId),
     });
 
     // SourceManager: tracks active/inactive sources and formats state for context injection
@@ -171,9 +187,6 @@ export abstract class BaseAgent implements AgentBackend {
 
     // PathProcessor: expands ~ and normalizes paths
     this.pathProcessor = new PathProcessor();
-
-    // PlanningAdvisor: heuristics for planning mode suggestions
-    this.planningAdvisor = new PlanningAdvisor();
 
     // UsageTracker: token usage and context window tracking
     this.usageTracker = new UsageTracker({
@@ -246,6 +259,81 @@ export abstract class BaseAgent implements AgentBackend {
   }
 
   // ============================================================
+  // Session MCP Tool Completion Handling
+  // ============================================================
+
+  /**
+   * Handle successful completion of a session MCP tool (SubmitPlan, auth tools).
+   *
+   * WHY THIS IS ON BaseAgent:
+   * -------------------------
+   * Session-scoped tools (SubmitPlan, source_oauth_trigger, etc.) run in an
+   * EXTERNAL MCP server subprocess (packages/session-mcp-server). That subprocess
+   * has its own process memory, so when it calls getSessionScopedToolCallbacks(),
+   * the callback registry is empty — it was populated in THIS process, not the subprocess.
+   *
+   * Instead, each backend (CodexAgent, CopilotAgent) detects session MCP tool
+   * completions from its own event stream (different formats per SDK) and calls
+   * THIS shared method to fire the appropriate callback.
+   *
+   * ClaudeAgent doesn't need this — its session-scoped tools run in-process
+   * via Claude Agent SDK, so the callback registry works directly.
+   *
+   * CALLBACKS FIRED:
+   * - SubmitPlan → this.onPlanSubmitted(planPath)
+   *   → Electron reads plan file, shows plan card, calls forceAbort(PlanSubmitted)
+   * - Auth tools → this.onAuthRequest(authRequest)
+   *   → Electron shows auth dialog, calls forceAbort(AuthRequest)
+   */
+  protected handleSessionMcpToolCompletion(
+    toolName: string,
+    args: Record<string, unknown>
+  ): void {
+    // SubmitPlan — trigger plan view in the UI.
+    // The Electron SessionManager's onPlanSubmitted callback will:
+    //   1. Read the plan file content
+    //   2. Create a plan message (role: 'plan')
+    //   3. Send plan_submitted event to renderer
+    //   4. Call forceAbort(AbortReason.PlanSubmitted) → turn terminates
+    if (toolName === 'SubmitPlan' && args.planPath) {
+      this.debug(`SubmitPlan completed: ${args.planPath}`);
+      this.onPlanSubmitted?.(args.planPath as string);
+      return;
+    }
+
+    // Auth tools — trigger auth request in the UI.
+    // Maps MCP tool names to auth request types.
+    const authToolTypes: Record<string, string> = {
+      'source_oauth_trigger': 'oauth',
+      'source_google_oauth_trigger': 'oauth-google',
+      'source_slack_oauth_trigger': 'oauth-slack',
+      'source_microsoft_oauth_trigger': 'oauth-microsoft',
+      'source_credential_prompt': 'credential',
+    };
+
+    const authType = authToolTypes[toolName];
+    if (authType && args.sourceSlug && this.onAuthRequest) {
+      const sourceSlug = args.sourceSlug as string;
+      const source = this.sourceManager.getAllSources().find(s => s.config.slug === sourceSlug);
+      const sourceName = source?.config.name || sourceSlug;
+      this.debug(`Auth tool completed: ${toolName} for ${sourceSlug}`);
+      this.onAuthRequest({
+        type: authType,
+        requestId: `${Date.now()}-auth`,
+        sessionId: this.config.session?.id || '',
+        sourceSlug,
+        sourceName,
+        ...(authType === 'credential' && {
+          mode: (args.mode as string) || 'bearer',
+          labels: args.labels as Record<string, string> | undefined,
+          description: args.description as string | undefined,
+          hint: args.hint as string | undefined,
+        }),
+      } as AuthRequest);
+    }
+  }
+
+  // ============================================================
   // Model & Thinking Configuration (AgentBackend interface)
   // ============================================================
 
@@ -295,26 +383,6 @@ export abstract class BaseAgent implements AgentBackend {
    */
   isInSafeMode(): boolean {
     return this.permissionManager.getPermissionMode() === 'safe';
-  }
-
-  // ============================================================
-  // Planning Heuristics (delegated to PlanningAdvisor)
-  // ============================================================
-
-  /**
-   * Check if a task should trigger planning (heuristic).
-   * Returns true for complex tasks that would benefit from planning mode.
-   */
-  shouldSuggestPlanning(userMessage: string): boolean {
-    return this.planningAdvisor.shouldSuggestPlanning(userMessage);
-  }
-
-  /**
-   * Get detailed planning analysis for a user message.
-   * Returns confidence score and reasons for planning recommendation.
-   */
-  analyzePlanningNeed(userMessage: string): { shouldPlan: boolean; confidence: number; reasons: string[] } {
-    return this.planningAdvisor.analyze(userMessage);
   }
 
   // ============================================================
@@ -607,6 +675,76 @@ Please continue the conversation naturally from where we left off.
   }
 
   // ============================================================
+  // Skill Content (shared across backends)
+  // ============================================================
+
+  /**
+   * SKILL INJECTION STRATEGY
+   * ClaudeAgent: Uses the SDK's built-in Skill tool for native discovery.
+   * CodexAgent: Reads SKILL.md and injects content as <skill> XML blocks,
+   *   because Codex app-server only discovers skills from its own paths.
+   */
+  protected getSkillContent(skillPath: string): string | null {
+    const filePath = join(skillPath, 'SKILL.md')
+    return existsSync(filePath) ? readFileSync(filePath, 'utf-8') : null
+  }
+
+  /**
+   * Extract skill mentions from a message and return formatted skill contents.
+   *
+   * Parses [skill:slug] or [skill:workspaceId:slug] mentions, loads the
+   * corresponding SKILL.md files, and wraps them in XML tags.
+   *
+   * Used by CodexAgent and CopilotAgent to inject skill content into messages.
+   * (ClaudeAgent uses the SDK's native Skill tool instead.)
+   *
+   * @param message - The user message containing potential skill mentions
+   * @returns Object with:
+   *   - skillContents: Array of formatted skill XML blocks
+   *   - cleanMessage: Message with mentions stripped, or default directive
+   */
+  protected extractSkillContent(message: string): {
+    skillContents: string[];
+    cleanMessage: string;
+  } {
+    const workspaceRoot = this.config.workspace?.rootPath ?? this.workingDirectory;
+    const skills = loadWorkspaceSkills(workspaceRoot);
+    const skillSlugs = skills.map(s => s.slug);
+
+    this.debug(`[extractSkillContent] Available skills: ${skillSlugs.join(', ')}`);
+
+    const parsed = parseMentions(message, skillSlugs, []);
+    this.debug(`[extractSkillContent] Parsed skills: ${JSON.stringify(parsed.skills)}`);
+
+    // Read matched SKILL.md files and wrap in XML tags
+    const skillContents: string[] = [];
+    for (const slug of parsed.skills) {
+      const skill = skills.find(s => s.slug === slug);
+      if (skill) {
+        const content = this.getSkillContent(skill.path);
+        if (content) {
+          this.debug(`[extractSkillContent] Loaded skill ${skill.slug} (${content.length} chars)`);
+          skillContents.push(`<skill name="${skill.slug}">\n${content}\n</skill>`);
+        } else {
+          this.debug(`[extractSkillContent] SKILL.md not found: ${skill.path}`);
+        }
+      }
+    }
+
+    // Strip all bracket mentions from the message text
+    const stripped = stripAllMentions(message).trim();
+
+    // If user sent only skill mentions with no other text, add a directive
+    const cleanMessage = (!stripped && skillContents.length > 0)
+      ? 'Follow the skill instructions above.'
+      : stripped;
+
+    this.debug(`[extractSkillContent] Clean message: "${cleanMessage.slice(0, 100)}...", skills: ${skillContents.length}`);
+
+    return { skillContents, cleanMessage };
+  }
+
+  // ============================================================
   // Abstract Methods (provider-specific, must be implemented)
   // ============================================================
 
@@ -640,6 +778,103 @@ Please continue the conversation naturally from where we left off.
    * Respond to a pending permission request.
    */
   abstract respondToPermission(requestId: string, allowed: boolean, alwaysAllow?: boolean): void;
+
+  /**
+   * Run a simple text completion using the agent's auth infrastructure.
+   * No tools, no system prompt - just text in → text out.
+   * Each backend implements using its own SDK (Claude SDK query() or Codex app-server).
+   *
+   * @param prompt - The prompt to send
+   * @returns The model's response text, or null if completion fails
+   */
+  abstract runMiniCompletion(prompt: string): Promise<string | null>;
+
+  // ============================================================
+  // Title Generation (shared implementation using runMiniCompletion)
+  // ============================================================
+
+  /**
+   * Generate a session title from a user message.
+   * Uses runMiniCompletion with the same auth as the main agent.
+   *
+   * @param message - The user's message to generate a title from
+   * @returns Generated title (2-5 words), or null if generation fails
+   */
+  async generateTitle(message: string): Promise<string | null> {
+    try {
+      const prompt = buildTitlePrompt(message);
+      const result = await this.runMiniCompletion(prompt);
+      return validateTitle(result);
+    } catch (error) {
+      this.debug(`[generateTitle] Failed: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Regenerate a session title based on recent conversation context.
+   * Uses recent messages to capture what the session has evolved into.
+   *
+   * @param recentUserMessages - The last few user messages
+   * @param lastAssistantResponse - The most recent assistant response
+   * @returns Generated title (2-5 words), or null if generation fails
+   */
+  async regenerateTitle(recentUserMessages: string[], lastAssistantResponse: string): Promise<string | null> {
+    try {
+      const prompt = buildRegenerateTitlePrompt(recentUserMessages, lastAssistantResponse);
+      const result = await this.runMiniCompletion(prompt);
+      return validateTitle(result);
+    } catch (error) {
+      this.debug(`[regenerateTitle] Failed: ${error}`);
+      return null;
+    }
+  }
+
+  // ============================================================
+  // Large Response Handling (shared implementation using runMiniCompletion)
+  // ============================================================
+
+  /**
+   * Handle a large tool result: save to disk, summarize, and format.
+   * Uses runMiniCompletion with the same auth as the main agent.
+   *
+   * @param text - The large response text
+   * @param sessionPath - Path to the session folder
+   * @param context - Context about the tool call
+   * @returns Result with formatted message + file path, or null if not large enough
+   */
+  async handleLargeToolResult(
+    text: string,
+    sessionPath: string,
+    context: SummarizationContext
+  ): Promise<HandleLargeResponseResult | null> {
+    try {
+      return await handleLargeResponse({
+        text,
+        sessionPath,
+        context,
+        summarize: this.runMiniCompletion.bind(this),
+      });
+    } catch (error) {
+      this.debug(`[handleLargeToolResult] Failed: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Check if a response is large enough to need handling.
+   */
+  isLargeResponse(text: string): boolean {
+    return estimateTokens(text) > TOKEN_LIMIT;
+  }
+
+  /**
+   * Get a bound summarize callback for passing to API tool builders.
+   * This allows MCP servers to summarize using the agent's auth infrastructure.
+   */
+  getSummarizeCallback(): (prompt: string) => Promise<string | null> {
+    return this.runMiniCompletion.bind(this);
+  }
 }
 
 // Re-export for convenience

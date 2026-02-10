@@ -16,6 +16,7 @@
 
 import type { AgentEvent } from '@craft-agent/core/types';
 import type { FileAttachment } from '../utils/files.ts';
+import { extractWorkspaceSlug } from '../utils/workspace.ts';
 import type { ThinkingLevel } from './thinking-levels.ts';
 import type { AuthRequest } from '@craft-agent/session-tools-core';
 import { type PermissionMode, shouldAllowToolInMode } from './mode-manager.ts';
@@ -30,7 +31,7 @@ import { AbortReason } from './backend/types.ts';
 import type { Workspace } from '../config/storage.ts';
 
 // Import models from centralized registry
-import { DEFAULT_CODEX_MODEL, getModelById, getModelIdByShortName } from '../config/models.ts';
+import { DEFAULT_CODEX_MODEL, getModelById, getModelIdByShortName, isCodexModel } from '../config/models.ts';
 
 // BaseAgent provides common functionality
 import { BaseAgent } from './base-agent.ts';
@@ -50,11 +51,12 @@ import {
 // Codex binary resolver
 import { resolveCodexBinary } from '../codex/binary-resolver.ts';
 
-// ChatGPT OAuth for token refresh
+// ChatGPT OAuth for token refresh and API key exchange
 import { refreshChatGptTokens, type ChatGptTokens } from '../auth/chatgpt-oauth.ts';
 
 // Credential manager for stored tokens
 import { getCredentialManager } from '../credentials/index.ts';
+
 
 // Event adapter
 import { EventAdapter } from './backend/codex/event-adapter.ts';
@@ -62,18 +64,15 @@ import { EventAdapter } from './backend/codex/event-adapter.ts';
 // Error parsing for typed errors
 import { parseError, type AgentError } from './errors.ts';
 
+// Debug logging
+import { debug } from '../utils/debug.ts';
+
 // Session storage for plans folder path
 import { getSessionPlansPath } from '../sessions/storage.ts';
 
-// Mention parsing for skill extraction
-import { parseMentions, stripAllMentions } from '../mentions/index.ts';
-
-// Skills loader for resolving skill paths
-import { loadWorkspaceSkills } from '../skills/storage.ts';
-import type { LoadedSkill } from '../skills/types.ts';
-
 // Path utilities for cross-platform normalization
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
 
 // System prompt for Craft Agent context
 import { getSystemPrompt } from '../prompts/system.ts';
@@ -147,25 +146,6 @@ const THINKING_TO_EFFORT: Record<ThinkingLevel, ReasoningEffort> = {
   max: 'high',
 };
 
-function buildSkillCatalogForCodex(workspaceRoot: string): string {
-  const skills = loadWorkspaceSkills(workspaceRoot);
-  if (skills.length === 0) return '';
-
-  const entries = skills.map((s: LoadedSkill) => {
-    const skillMdPath = join(s.path, 'SKILL.md');
-    return `- **${s.metadata.name}** (${s.slug}): ${s.metadata.description}\n  Path: \`${skillMdPath}\``;
-  });
-
-  return [
-    '\n## Available Skills',
-    '',
-    'The following skills are available in this workspace. To use a skill, read its SKILL.md file for full instructions.',
-    '',
-    ...entries,
-    '',
-  ].join('\n');
-}
-
 // ============================================================
 // CodexAgent Implementation
 // ============================================================
@@ -190,6 +170,10 @@ export class CodexAgent extends BaseAgent {
   // App-server client
   private client: AppServerClient | null = null;
   private clientConnecting: Promise<void> | null = null;
+
+  // Deferred ChatGPT tokens — cached by tryInjectStoredChatGptTokens(),
+  // injected after ensureClient() connects (avoids 30s timeout during agent creation)
+  private _pendingChatGptTokens: { idToken: string; accessToken: string } | null = null;
 
   // State
   private _isProcessing: boolean = false;
@@ -364,28 +348,44 @@ export class CodexAgent extends BaseAgent {
 
     this.debug('App-server client connected');
 
-    // Inject auth tokens for the new client to avoid 401 errors after interrupts
-    // This mirrors the token injection in reconnect() but is needed whenever
-    // a fresh client is created (e.g., after forceAbort with UserStop)
-    const normalizedAuthType =
-      this.config.authType ??
-      (this.config.legacyAuthType === 'api_key'
-        ? 'api_key'
-        : this.config.legacyAuthType === 'oauth_token'
-          ? 'oauth'
-          : undefined);
-
-    if (normalizedAuthType === 'oauth') {
-      this.debug('Injecting stored ChatGPT tokens for new client...');
-      const injected = await this.tryInjectStoredChatGptTokens();
-      if (!injected) {
-        this.debug('No stored ChatGPT tokens available - auth may be required');
-        // Don't throw here - let the chat() method handle auth requirements
-        // via the onChatGptAuthRequired callback when the server responds with 401
+    // Inject auth tokens for the new client to avoid 401 errors after interrupts.
+    // This is needed whenever a fresh client is created (e.g., after forceAbort with UserStop).
+    //
+    // First, check for deferred tokens cached by tryInjectStoredChatGptTokens() during
+    // agent creation — this avoids the 30s timeout that would occur if we called
+    // tryInjectStoredChatGptTokens() before the client existed.
+    if (this._pendingChatGptTokens) {
+      this.debug('Injecting deferred ChatGPT tokens...');
+      try {
+        await this.client.accountLoginWithChatGptTokens(this._pendingChatGptTokens);
+        this.debug('Deferred ChatGPT tokens injected successfully');
+      } catch (err) {
+        this.debug(`Failed to inject deferred ChatGPT tokens: ${err}`);
       }
-    } else if (normalizedAuthType === 'api_key' || normalizedAuthType === 'api_key_with_endpoint') {
-      this.debug('Injecting stored API key for new client...');
-      await this.tryInjectStoredApiKey();
+      this._pendingChatGptTokens = null;
+    } else {
+      // No deferred tokens — fall back to loading from credential store
+      // (handles reconnect after forceAbort, etc.)
+      const normalizedAuthType =
+        this.config.authType ??
+        (this.config.legacyAuthType === 'api_key'
+          ? 'api_key'
+          : this.config.legacyAuthType === 'oauth_token'
+            ? 'oauth'
+            : undefined);
+
+      if (normalizedAuthType === 'oauth') {
+        this.debug('Injecting stored ChatGPT tokens for new client...');
+        const injected = await this.tryInjectStoredChatGptTokens();
+        if (!injected) {
+          this.debug('No stored ChatGPT tokens available - auth may be required');
+          // Don't throw here - let the chat() method handle auth requirements
+          // via the onChatGptAuthRequired callback when the server responds with 401
+        }
+      } else if (normalizedAuthType === 'api_key' || normalizedAuthType === 'api_key_with_endpoint') {
+        this.debug('Injecting stored API key for new client...');
+        await this.tryInjectStoredApiKey();
+      }
     }
 
     return this.client;
@@ -443,51 +443,15 @@ export class CodexAgent extends BaseAgent {
     this.client.on('item/completed', async (notification) => {
       const events = this.adapter.adaptItemCompleted(notification);
       for (const event of events) {
-        // Check for session MCP tool completions that need callbacks
-        // Detect directly here since session-mcp-server's stderr isn't forwarded
+        // Check for session MCP tool completions that need callbacks.
+        // Session MCP tools run in an external subprocess that can't trigger
+        // callbacks cross-process. Detect from events and use the centralized
+        // BaseAgent.handleSessionMcpToolCompletion() to fire them.
         if (event.type === 'tool_result' && !event.isError) {
           const item = notification.item;
           if (item?.type === 'mcpToolCall' && item.server === 'session') {
             const args = (item.arguments ?? {}) as Record<string, unknown>;
-
-            // SubmitPlan - trigger plan view
-            if (item.tool === 'SubmitPlan' && args.planPath) {
-              this.debug(`SubmitPlan completed: ${args.planPath}`);
-              this.onPlanSubmitted?.(args.planPath as string);
-            }
-
-            // Auth tools - trigger auth request
-            const authToolTypes: Record<string, AuthRequest['type']> = {
-              'source_oauth_trigger': 'oauth',
-              'source_google_oauth_trigger': 'oauth-google',
-              'source_slack_oauth_trigger': 'oauth-slack',
-              'source_microsoft_oauth_trigger': 'oauth-microsoft',
-              'source_credential_prompt': 'credential',
-            };
-
-            const authType = authToolTypes[item.tool];
-            if (authType && args.sourceSlug && this.onAuthRequest) {
-              const sourceSlug = args.sourceSlug as string;
-              const source = this.sourceManager.getAllSources().find(s => s.config.slug === sourceSlug);
-              const sourceName = source?.config.name || sourceSlug;
-
-              const authRequest: AuthRequest = {
-                type: authType,
-                requestId: `${item.id}-auth`,
-                sessionId: this.config.session?.id || '',
-                sourceSlug,
-                sourceName,
-                ...(authType === 'credential' && {
-                  mode: (args.mode as string) || 'bearer',
-                  labels: args.labels as Record<string, string> | undefined,
-                  description: args.description as string | undefined,
-                  hint: args.hint as string | undefined,
-                }),
-              } as AuthRequest;
-
-              this.debug(`Auth tool completed: ${item.tool} for ${sourceSlug}`);
-              this.onAuthRequest(authRequest);
-            }
+            this.handleSessionMcpToolCompletion(item.tool, args);
           }
         }
 
@@ -1106,11 +1070,14 @@ export class CodexAgent extends BaseAgent {
 
     // ============================================================
     // SKILL QUALIFICATION: Ensure skill names are fully-qualified
+    // SDK expects "workspaceSlug:skillSlug" format, NOT UUID
     // ============================================================
     if (sdkToolName === 'Skill') {
+      const rootPath = this.config.workspace.rootPath ?? this.workingDirectory;
+      const workspaceSlug = extractWorkspaceSlug(rootPath, this.config.workspace.id);
       const skillResult = qualifySkillName(
         modifiedInput || inputObj,
-        this.config.workspace.id,
+        workspaceSlug,
         (msg) => this.debug(`PreToolUse: ${msg}`)
       );
       if (skillResult.modified) {
@@ -1417,8 +1384,30 @@ export class CodexAgent extends BaseAgent {
           this.debug('Stored tokens expired, attempting refresh...');
           const newTokens = await refreshChatGptTokens(storedCreds.refreshToken);
 
-          // Store and inject new tokens
-          await this.injectChatGptTokens(newTokens);
+          // Store refreshed tokens in credential manager
+          const credMgr = getCredentialManager();
+          await credMgr.setLlmOAuth(this.credentialSlug, {
+            accessToken: newTokens.accessToken,
+            idToken: newTokens.idToken,
+            refreshToken: newTokens.refreshToken,
+            expiresAt: newTokens.expiresAt,
+          });
+
+          // If client is already connected (reconnect scenario), inject directly.
+          // Otherwise cache for deferred injection during ensureClient().
+          if (this.client?.isConnected()) {
+            await this.client.accountLoginWithChatGptTokens({
+              idToken: newTokens.idToken,
+              accessToken: newTokens.accessToken,
+            });
+            this.debug('Refreshed ChatGPT tokens injected directly');
+          } else {
+            this._pendingChatGptTokens = {
+              idToken: newTokens.idToken,
+              accessToken: newTokens.accessToken,
+            };
+            this.debug('Refreshed ChatGPT tokens cached for deferred injection');
+          }
           return true;
         }
         this.debug('Stored tokens expired and no refresh token available');
@@ -1431,14 +1420,22 @@ export class CodexAgent extends BaseAgent {
         return false;
       }
 
-      // Inject stored tokens using correct fields
-      const client = await this.ensureClient();
-      await client.accountLoginWithChatGptTokens({
-        idToken: storedCreds.idToken,
-        accessToken: storedCreds.accessToken,
-      });
-
-      this.debug('Stored ChatGPT tokens injected successfully');
+      // If client is already connected (reconnect scenario), inject directly.
+      // Otherwise cache for deferred injection during ensureClient() — avoids
+      // spawning the app-server process here which can hang for 30s on timeout.
+      if (this.client?.isConnected()) {
+        await this.client.accountLoginWithChatGptTokens({
+          idToken: storedCreds.idToken,
+          accessToken: storedCreds.accessToken,
+        });
+        this.debug('Stored ChatGPT tokens injected directly');
+      } else {
+        this._pendingChatGptTokens = {
+          idToken: storedCreds.idToken,
+          accessToken: storedCreds.accessToken,
+        };
+        this.debug('ChatGPT tokens cached for deferred injection');
+      }
       return true;
     } catch (error) {
       this.debug(`Failed to inject stored ChatGPT tokens: ${error}`);
@@ -1539,6 +1536,108 @@ export class CodexAgent extends BaseAgent {
   }
 
   // ============================================================
+  // Title Generation (via app-server)
+  // ============================================================
+
+  /**
+   * Generate a title by routing through the Codex app-server.
+   * Uses the cheapest model (Codex Mini) with an ephemeral thread.
+   * Falls back to null on failure — caller should fall back to Claude.
+   */
+  async generateTitle(prompt: string): Promise<string | null> {
+    const client = await this.ensureClient();
+
+    // Use the cheapest model (Codex Mini) — title is just a 5-word summary
+    const miniModelId = getModelIdByShortName('Codex Mini');
+    const model = resolveCodexModelId(miniModelId, this.config.authType);
+
+    this.debug(`[generateTitle] Starting ephemeral thread with model=${model}`);
+
+    // Start an ephemeral thread (not persisted, no tools)
+    const response = await client.threadStart({
+      model,
+      ephemeral: true,
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
+      baseInstructions: 'Reply with ONLY the requested text. No explanation.',
+    });
+    const threadId = response.thread.id;
+
+    this.debug(`[generateTitle] Thread started: ${threadId}`);
+
+    // Send the title prompt
+    await client.turnStart({
+      threadId,
+      input: [{ type: 'text', text: prompt, text_elements: [] }],
+      cwd: null,
+      approvalPolicy: null,
+      sandboxPolicy: null,
+      model: null,
+      effort: null,
+      summary: null,
+      personality: null,
+      outputSchema: null,
+      collaborationMode: null,
+    });
+
+    // Collect text from agentMessage/delta events until turn completes.
+    // Filter by threadId to avoid interference with the main chat thread.
+    let title = '';
+    const result = await new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(title); // resolve with whatever we have
+      }, 15000);
+
+      const onDelta = (ev: { threadId: string; delta: string }) => {
+        if (ev.threadId === threadId) {
+          title += ev.delta;
+        }
+      };
+      const onTurnComplete = (ev: { threadId: string }) => {
+        if (ev.threadId === threadId) {
+          clearTimeout(timeout);
+          cleanup();
+          resolve(title);
+        }
+      };
+      const onCodexError = (ev: { threadId: string; error: { message?: string } }) => {
+        if (ev.threadId === threadId) {
+          clearTimeout(timeout);
+          cleanup();
+          reject(new Error(ev.error?.message ?? 'Codex title generation failed'));
+        }
+      };
+      const onProcessError = (err: Error) => {
+        // If a main chat turn is active, this error likely belongs to it — not to title gen
+        if (this.currentTurnId) {
+          this.debug(`[generateTitle] Ignoring process error during active turn: ${err.message}`);
+          return;
+        }
+        clearTimeout(timeout);
+        cleanup();
+        reject(err);
+      };
+
+      const cleanup = () => {
+        client.off('item/agentMessage/delta', onDelta);
+        client.off('turn/completed', onTurnComplete);
+        client.off('codex/error', onCodexError);
+        client.off('error', onProcessError);
+      };
+
+      client.on('item/agentMessage/delta', onDelta);
+      client.on('turn/completed', onTurnComplete);
+      client.on('codex/error', onCodexError);
+      client.on('error', onProcessError);
+    });
+
+    const trimmed = result.trim();
+    this.debug(`[generateTitle] Result: "${trimmed}"`);
+    return (trimmed.length > 0 && trimmed.length < 100) ? trimmed : null;
+  }
+
+  // ============================================================
   // Chat & Lifecycle
   // ============================================================
 
@@ -1606,7 +1705,7 @@ export class CodexAgent extends BaseAgent {
                   undefined, // preset (default)
                   'Codex' // backend name
                 ),
-            developerInstructions: buildSkillCatalogForCodex(this.config.workspace.rootPath ?? this.workingDirectory) || null,
+            developerInstructions: null,
             personality: null,
           });
           this.debug(`Resumed thread: ${this.codexThreadId}`);
@@ -1643,7 +1742,7 @@ export class CodexAgent extends BaseAgent {
                   undefined, // preset (default)
                   'Codex' // backend name
                 ),
-            developerInstructions: buildSkillCatalogForCodex(this.config.workspace.rootPath ?? this.workingDirectory) || null,
+            developerInstructions: null,
           });
           this.codexThreadId = response.thread.id;
           this.debug(`Started new thread: ${this.codexThreadId}`);
@@ -1667,7 +1766,7 @@ export class CodexAgent extends BaseAgent {
                 undefined, // preset (default)
                 'Codex' // backend name
               ),
-          developerInstructions: buildSkillCatalogForCodex(this.config.workspace.rootPath ?? this.workingDirectory) || null,
+          developerInstructions: null,
         });
         this.codexThreadId = response.thread.id;
         this.debug(`Started new thread: ${this.codexThreadId}`);
@@ -1678,7 +1777,8 @@ export class CodexAgent extends BaseAgent {
       const input = this.buildUserInput(message, attachments);
 
       // Start turn
-      this.debug(`Starting turn with input: ${message.slice(0, 100)}...`);
+      const inputSummary = input.map(i => i.type === 'skill' ? `skill:${(i as any).name}` : i.type === 'text' ? `text(${(i as any).text?.length ?? 0} chars)` : i.type).join(', ');
+      this.debug(`Starting turn with ${input.length} input items: [${inputSummary}]`);
       await client.turnStart({
         threadId: this.codexThreadId!,
         input,
@@ -1800,6 +1900,20 @@ export class CodexAgent extends BaseAgent {
       };
     }
 
+    // App-server initialization timeout (process started but didn't respond)
+    if (errorMessage.includes('request timeout') && errorMessage.includes('initialize')) {
+      return {
+        code: 'network_error',
+        title: 'Codex Failed to Start',
+        message: 'The Codex app-server started but did not respond. This may be caused by an expired OpenAI quota or network issue. Check your OpenAI billing at platform.openai.com.',
+        actions: [
+          { key: 'r', label: 'Retry', action: 'retry' },
+        ],
+        canRetry: true,
+        originalError: error.message,
+      };
+    }
+
     // App-server connection errors
     if (
       errorMessage.includes('failed to connect') ||
@@ -1810,6 +1924,20 @@ export class CodexAgent extends BaseAgent {
         code: 'network_error',
         title: 'Codex Not Found',
         message: 'Could not start the Codex app-server. Make sure Codex is installed and accessible in your PATH.',
+        actions: [
+          { key: 'r', label: 'Retry', action: 'retry' },
+        ],
+        canRetry: true,
+        originalError: error.message,
+      };
+    }
+
+    // OpenAI quota exhaustion (insufficient_quota / exceeded quota)
+    if (errorMessage.includes('quota') || errorMessage.includes('insufficient_quota')) {
+      return {
+        code: 'rate_limited',
+        title: 'OpenAI Quota Exceeded',
+        message: 'Your OpenAI API quota has been exceeded. Check your plan and billing at platform.openai.com.',
         actions: [
           { key: 'r', label: 'Retry', action: 'retry' },
         ],
@@ -1851,30 +1979,9 @@ export class CodexAgent extends BaseAgent {
     const input: UserInput[] = [];
 
     // ============================================================
-    // SKILL MENTION EXTRACTION
+    // SKILL MENTION EXTRACTION (delegated to BaseAgent)
     // ============================================================
-
-    // Parse [skill:workspaceId:slug] mentions from the message.
-    // Load workspace skills to match against and resolve paths.
-    const workspaceRoot = this.config.workspace.rootPath ?? this.workingDirectory;
-    const skills = loadWorkspaceSkills(workspaceRoot);
-    const skillSlugs = skills.map(s => s.slug);
-    const parsed = parseMentions(message, skillSlugs, []);
-
-    // Add matched skills as skill UserInput items.
-    // Codex loads the SKILL.md from the given path and injects its instructions.
-    for (const slug of parsed.skills) {
-      const skill = skills.find(s => s.slug === slug);
-      if (skill) {
-        input.push({ type: 'skill' as const, name: skill.slug, path: join(skill.path, 'SKILL.md') });
-      }
-    }
-
-    // Strip all [bracket] mentions from the message text.
-    // Codex doesn't understand [skill:...], [source:...] etc. annotations.
-    // REMOVED: This doesn't seem to be in the prod app and breaks Codex skill detection.
-    // Not sure what it was for and how it remained in this repo.
-    const cleanMessage = message; //stripAllMentions(message);
+    const { skillContents, cleanMessage: effectiveMessage } = this.extractSkillContent(message);
 
     // ============================================================
     // CONTEXT INJECTION (matching ClaudeAgent)
@@ -1883,6 +1990,7 @@ export class CodexAgent extends BaseAgent {
     // Build context parts using centralized PromptBuilder
     // This includes: date/time, session state (with plansFolderPath),
     // workspace capabilities, and working directory context
+    const workspaceRoot = this.config.workspace.rootPath ?? this.workingDirectory;
     const contextParts = this.promptBuilder.buildContextParts(
       {
         plansFolderPath: getSessionPlansPath(
@@ -1924,11 +2032,12 @@ export class CodexAgent extends BaseAgent {
     // COMBINE INTO MESSAGE
     // ============================================================
 
-    // Combine: context + attachments + user message (with mentions stripped)
+    // Combine: skill instructions + context + attachments + user message
     const allParts = [
+      ...skillContents,
       ...contextParts,
       ...attachmentParts,
-      cleanMessage,
+      effectiveMessage,
     ].filter(Boolean);
 
     const fullMessage = allParts.join('\n\n');
@@ -2156,7 +2265,7 @@ export class CodexAgent extends BaseAgent {
                 undefined, // preset (default)
                 'Codex' // backend name
               ),
-          developerInstructions: buildSkillCatalogForCodex(this.config.workspace.rootPath ?? this.workingDirectory) || null,
+          developerInstructions: null,
           personality: null,
         });
         this.debug(`Thread ${threadId} resumed successfully`);
@@ -2308,6 +2417,114 @@ export class CodexAgent extends BaseAgent {
         `API servers (${apiServerCount}) are not supported in Codex backend. ` +
         `Servers: ${Object.keys(apiServers).join(', ')}`
       );
+    }
+  }
+
+  // ============================================================
+  // Mini Completion (for title generation and other quick tasks)
+  // ============================================================
+
+  /**
+   * Run a simple text completion using the Codex app-server.
+   * No tools, empty system prompt - just text in → text out.
+   * Uses the same auth infrastructure as the main agent.
+   *
+   * Creates an ephemeral thread for the completion so it doesn't
+   * interfere with the main conversation thread.
+   */
+  async runMiniCompletion(prompt: string): Promise<string | null> {
+    // Use direct debug() for logging since temporary agents don't have onDebug set
+    debug(`[CodexAgent.runMiniCompletion] Starting`);
+
+    try {
+      // Ensure client is connected (includes auth injection)
+      const client = await this.ensureClient();
+      debug(`[CodexAgent.runMiniCompletion] Client connected`);
+
+      // Use a smaller model for quick completions
+      let model = this.config.miniModel ?? 'gpt-5-mini';
+      if (isCodexModel(model)) {
+        model = 'gpt-5-mini';
+      }
+      debug(`[CodexAgent.runMiniCompletion] Using model: ${model}`);
+
+      // Start an ephemeral thread with no system prompt
+      debug(`[CodexAgent.runMiniCompletion] Starting ephemeral thread...`);
+      const threadResponse = await client.threadStart({
+        model,
+        cwd: this.workingDirectory,
+        baseInstructions: '', // Empty - no system prompt
+        ephemeral: true, // Don't persist this thread
+      });
+      const threadId = threadResponse.thread.id;
+      debug(`[CodexAgent.runMiniCompletion] Started ephemeral thread: ${threadId}`);
+
+      // Set up Promise-based completion tracking
+      let result = '';
+      let completionResolve: () => void;
+      const completionPromise = new Promise<void>((resolve) => {
+        completionResolve = resolve;
+      });
+
+      // Collect response text from deltas
+      const textHandler = (notification: { threadId: string; delta?: string }) => {
+        if (notification.threadId === threadId && notification.delta) {
+          result += notification.delta;
+          debug(`[CodexAgent.runMiniCompletion] Delta: ${notification.delta}`);
+        }
+      };
+
+      // Resolve when turn completes
+      const completionHandler = (notification: { threadId: string }) => {
+        if (notification.threadId === threadId) {
+          debug(`[CodexAgent.runMiniCompletion] Turn completed`);
+          completionResolve();
+        }
+      };
+
+      // Set up listeners
+      client.on('item/agentMessage/delta', textHandler);
+      client.on('turn/completed', completionHandler);
+
+      try {
+        // Start the turn with our prompt
+        debug(`[CodexAgent.runMiniCompletion] Starting turn...`);
+        await client.turnStart({
+          threadId,
+          input: [{ type: 'text', text: prompt, text_elements: [] }],
+          cwd: null,
+          approvalPolicy: null,
+          sandboxPolicy: null,
+          model: null,
+          effort: null,
+          summary: null,
+          personality: null,
+          outputSchema: null,
+          collaborationMode: null,
+        });
+        debug(`[CodexAgent.runMiniCompletion] Turn started`);
+
+        // Wait for turn completion with timeout
+        const timeoutPromise = new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('Timeout')), 30000)
+        );
+
+        try {
+          await Promise.race([completionPromise, timeoutPromise]);
+        } catch (e) {
+          debug(`[CodexAgent.runMiniCompletion] Timeout waiting for completion`);
+        }
+
+        debug(`[CodexAgent.runMiniCompletion] Result: "${result.trim()}"`);
+        return result.trim() || null;
+      } finally {
+        // Clean up listeners
+        client.off('item/agentMessage/delta', textHandler);
+        client.off('turn/completed', completionHandler);
+      }
+    } catch (error) {
+      debug(`[CodexAgent.runMiniCompletion] Failed: ${error}`);
+      return null;
     }
   }
 }

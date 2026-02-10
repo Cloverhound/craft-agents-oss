@@ -178,6 +178,31 @@ export function isApiOAuthProvider(provider: string | undefined): provider is Ap
 }
 
 /**
+ * Check if a source uses OAuth authentication (for proactive token refresh).
+ *
+ * Returns true for:
+ * - MCP sources with authType: 'oauth'
+ * - API sources with OAuth providers (google, slack, microsoft)
+ *
+ * Only returns true if the source is authenticated (has tokens to refresh).
+ */
+export function isOAuthSource(source: LoadedSource): boolean {
+  if (!source.config.isAuthenticated) return false;
+
+  // MCP OAuth sources
+  if (source.config.type === 'mcp') {
+    return source.config.mcp?.authType === 'oauth';
+  }
+
+  // API OAuth sources (Google, Slack, Microsoft)
+  if (source.config.type === 'api') {
+    return isApiOAuthProvider(source.config.provider);
+  }
+
+  return false;
+}
+
+/**
  * MCP transport type for sources
  * - 'http': HTTP-based MCP server (URL endpoint)
  * - 'sse': Server-Sent Events MCP server (URL endpoint)
@@ -288,6 +313,62 @@ export interface LocalSourceConfig {
  */
 export type SourceConnectionStatus = 'connected' | 'needs_auth' | 'failed' | 'untested' | 'local_disabled';
 
+// ============================================================================
+// Source Brand & Action Cards
+// ============================================================================
+
+/**
+ * Brand theming for a source's UI elements (card headers, buttons).
+ * Uses the EntityColor system for light/dark mode support.
+ */
+export interface SourceBrand {
+  /** Primary brand color — used for card header tint and primary action buttons.
+   *  Can be a system color name ("accent", "info") or custom { light, dark } values.
+   *  Defaults to "accent" if not set. */
+  color?: import('../colors/types').EntityColor;
+}
+
+/**
+ * Handler for an action card button — defines what happens on click.
+ */
+export type SourceCardActionHandler =
+  | { type: 'api'; method: string; path: string }
+  | { type: 'mcp'; tool: string }
+  | { type: 'copy' }
+  | { type: 'open'; urlTemplate: string };
+
+/**
+ * An action button in a source card footer.
+ */
+export interface SourceCardAction {
+  /** Button label (e.g., "Send Email", "Post to #channel") */
+  label: string;
+  /** 'primary' uses brand color, 'secondary' uses outline */
+  variant: 'primary' | 'secondary';
+  /** What happens on click */
+  handler: SourceCardActionHandler;
+}
+
+/**
+ * Defines a card type that a source can render in AI responses.
+ * Sources declare these in config.json so the UI knows how to present
+ * structured content with source-branded styling and action buttons.
+ */
+export interface SourceCardDefinition {
+  /** Card type identifier (e.g., "email", "message", "event", "payment") */
+  type: string;
+  /** Human-readable label for the card header (e.g., "Email Draft") */
+  label: string;
+  /** Lucide icon name for the header (e.g., "mail", "hash", "calendar") */
+  icon: string;
+  /** Action buttons shown in the card footer */
+  actions: SourceCardAction[];
+}
+
+// ============================================================================
+// Main Source Config
+// ============================================================================
+
 /**
  * Main source configuration (stored in config.json)
  */
@@ -316,6 +397,12 @@ export interface FolderSourceConfig {
   // Short description for agent context (e.g., "Issue tracking, bugs, tasks, sprints")
   // If not set, extracted from guide.md first paragraph
   tagline?: string;
+
+  // Brand theming for this source's UI elements (card headers, buttons)
+  brand?: SourceBrand;
+
+  // Action card definitions this source supports
+  cards?: SourceCardDefinition[];
 
   // Status tracking
   isAuthenticated?: boolean;

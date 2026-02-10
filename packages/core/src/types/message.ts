@@ -314,6 +314,7 @@ export interface RecoveryAction {
 export type ErrorCode =
   | 'invalid_api_key'
   | 'invalid_credentials'
+  | 'response_too_large'
   | 'expired_oauth_token'
   | 'token_expired'
   | 'rate_limited'
@@ -327,6 +328,8 @@ export type ErrorCode =
   | 'invalid_model'          // Model ID not found
   | 'data_policy_error'      // OpenRouter data policy restriction
   | 'invalid_request'        // API rejected the request (e.g., bad image, invalid content)
+  | 'image_too_large'        // Image exceeds API dimension/size limits
+  | 'provider_error'         // AI provider experiencing issues (overloaded, unavailable)
   | 'unknown_error';
 
 /**

@@ -38,6 +38,9 @@ import {
 import { DropdownMenuProvider, ContextMenuProvider } from "@/components/ui/menu-context"
 import { SessionMenu } from "./SessionMenu"
 import { SessionSearchHeader } from "./SessionSearchHeader"
+import { ConnectionIcon } from "@/components/icons/ConnectionIcon"
+import { useOptionalAppShellContext } from "@/context/AppShellContext"
+import * as storage from "@/lib/local-storage"
 import {
   Dialog,
   DialogContent,
@@ -305,6 +308,8 @@ interface SessionItemProps {
   onOpenInNewWindow: () => void
   /** Current permission mode for this session (from real-time state) */
   permissionMode?: PermissionMode
+  /** LLM connection slug for this session */
+  llmConnection?: string
   /** Current search query for highlighting matches */
   searchQuery?: string
   /** Dynamic todo states from workspace config */
@@ -352,6 +357,7 @@ function SessionItem({
   onSelect,
   onOpenInNewWindow,
   permissionMode,
+  llmConnection,
   searchQuery,
   todoStates,
   flatLabels,
@@ -393,6 +399,16 @@ function SessionItem({
 
   // Theme context for resolving label colors (light/dark aware)
   const { isDark } = useTheme()
+
+  // Get connection details for icon display (only when enabled and multiple connections exist)
+  const appShellContext = useOptionalAppShellContext()
+  const showConnectionIcons = storage.get(storage.KEYS.showConnectionIcons, true)
+  const connectionDetails = useMemo(() => {
+    if (!showConnectionIcons) return null
+    if (!llmConnection || !appShellContext?.llmConnections) return null
+    if (appShellContext.llmConnections.length <= 1) return null
+    return appShellContext.llmConnections.find(c => c.slug === llmConnection) ?? null
+  }, [showConnectionIcons, llmConnection, appShellContext?.llmConnections])
 
   const handleClick = (e: React.MouseEvent) => {
     // Always activate session-list zone for keyboard navigation (arrow keys, Cmd+A, etc.)
@@ -562,6 +578,9 @@ function SessionItem({
                     Plan
                   </span>
                 )}
+                {connectionDetails && (
+                  <ConnectionIcon connection={connectionDetails} size={14} showTooltip />
+                )}
                 {permissionMode && (
                   <span
                     className={cn(
@@ -701,7 +720,7 @@ function SessionItem({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="shrink-0 text-[11px] text-foreground/40 whitespace-nowrap cursor-default">
-                      {formatDistanceToNowStrict(new Date(item.lastMessageAt), { locale: shortTimeLocale as Locale })}
+                      {formatDistanceToNowStrict(new Date(item.lastMessageAt), { locale: shortTimeLocale as Locale, roundingMethod: 'floor' })}
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" sideOffset={4}>
@@ -1562,6 +1581,7 @@ export function SessionList({
                         onSelect={() => handleSelectSession(item, flatIndex)}
                         onOpenInNewWindow={() => onOpenInNewWindow?.(item)}
                         permissionMode={sessionOptions?.get(item.id)?.permissionMode}
+                        llmConnection={item.llmConnection}
                         searchQuery={highlightQuery}
                         todoStates={todoStates}
                         flatLabels={flatLabels}
@@ -1607,6 +1627,7 @@ export function SessionList({
                         onSelect={() => handleSelectSession(item, flatIndex)}
                         onOpenInNewWindow={() => onOpenInNewWindow?.(item)}
                         permissionMode={sessionOptions?.get(item.id)?.permissionMode}
+                        llmConnection={item.llmConnection}
                         searchQuery={highlightQuery}
                         todoStates={todoStates}
                         flatLabels={flatLabels}
@@ -1653,6 +1674,7 @@ export function SessionList({
                       onSelect={() => handleSelectSession(item, flatIndex)}
                       onOpenInNewWindow={() => onOpenInNewWindow?.(item)}
                       permissionMode={sessionOptions?.get(item.id)?.permissionMode}
+                        llmConnection={item.llmConnection}
                       searchQuery={searchQuery}
                       todoStates={todoStates}
                       flatLabels={flatLabels}

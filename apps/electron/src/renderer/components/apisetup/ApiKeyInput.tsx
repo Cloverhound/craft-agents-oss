@@ -65,12 +65,10 @@ const ANTHROPIC_PRESETS: Preset[] = [
 ]
 
 // OpenAI provider presets - for Codex backend
-// Empty URL for 'openai' means use the default OpenAI API endpoint
+// Only direct OpenAI is supported; 3PP providers (OpenRouter, Vercel, Ollama) should be
+// configured via the Anthropic/Claude connection which routes through the Claude Agent SDK.
 const OPENAI_PRESETS: Preset[] = [
   { key: 'openai', label: 'OpenAI', url: '' },
-  { key: 'openrouter', label: 'OpenRouter', url: 'https://openrouter.ai/api/v1' },
-  { key: 'vercel', label: 'Vercel AI Gateway', url: 'https://ai-gateway.vercel.sh/v1' },
-  { key: 'custom', label: 'Custom', url: '' },
 ]
 
 const COMPAT_ANTHROPIC_DEFAULTS = 'anthropic/claude-opus-4.6, anthropic/claude-sonnet-4.5, anthropic/claude-haiku-4.5'
@@ -212,7 +210,8 @@ export function ApiKeyInput({
         </div>
       </div>
 
-      {/* Endpoint Preset Selector - always visible to allow switching between providers */}
+      {/* Endpoint Preset Selector - hidden when only one preset (e.g. Codex/OpenAI direct) */}
+      {presets.length > 1 && (
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="base-url">Endpoint</Label>
@@ -256,6 +255,7 @@ export function ApiKeyInput({
           </div>
         )}
       </div>
+      )}
 
       {/* Default Model (optional) — hidden for default provider presets since they use their own model routing */}
       {!isDefaultProviderPreset && (

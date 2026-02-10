@@ -56,7 +56,7 @@ export const onboardingComponents: ComponentEntry[] = [
     id: 'api-setup-step',
     name: 'APISetupStep',
     category: 'Onboarding',
-    description: 'Choose payment method for AI usage',
+    description: 'Choose payment method for AI usage with provider segmented control',
     component: APISetupStep,
     props: [
       {
@@ -67,16 +67,37 @@ export const onboardingComponents: ComponentEntry[] = [
           options: [
             { label: 'None', value: '' },
             { label: 'Claude OAuth', value: 'claude_oauth' },
-            { label: 'API Key', value: 'api_key' },
+            { label: 'Anthropic API Key', value: 'anthropic_api_key' },
+            { label: 'ChatGPT OAuth', value: 'chatgpt_oauth' },
+            { label: 'OpenAI API Key', value: 'openai_api_key' },
+            { label: 'Copilot OAuth', value: 'copilot_oauth' },
           ],
         },
         defaultValue: '',
       },
+      {
+        name: 'initialSegment',
+        description: 'Initial provider segment to show',
+        control: {
+          type: 'select',
+          options: [
+            { label: 'Anthropic', value: 'anthropic' },
+            { label: 'OpenAI', value: 'openai' },
+            { label: 'GitHub Copilot', value: 'copilot' },
+          ],
+        },
+        defaultValue: 'anthropic',
+      },
     ],
     variants: [
-      { name: 'No Selection', props: { selectedMethod: null } },
-      { name: 'Claude OAuth Selected', props: { selectedMethod: 'claude_oauth' } },
-      { name: 'API Key Selected', props: { selectedMethod: 'api_key' } },
+      { name: 'Anthropic Segment', props: { selectedMethod: null, initialSegment: 'anthropic' } },
+      { name: 'Anthropic - Claude OAuth Selected', props: { selectedMethod: 'claude_oauth', initialSegment: 'anthropic' } },
+      { name: 'Anthropic - API Key Selected', props: { selectedMethod: 'anthropic_api_key', initialSegment: 'anthropic' } },
+      { name: 'OpenAI Segment', props: { selectedMethod: null, initialSegment: 'openai' } },
+      { name: 'OpenAI - ChatGPT OAuth Selected', props: { selectedMethod: 'chatgpt_oauth', initialSegment: 'openai' } },
+      { name: 'OpenAI - API Key Selected', props: { selectedMethod: 'openai_api_key', initialSegment: 'openai' } },
+      { name: 'GitHub Copilot Segment', props: { selectedMethod: null, initialSegment: 'copilot' } },
+      { name: 'GitHub Copilot - OAuth Selected', props: { selectedMethod: 'copilot_oauth', initialSegment: 'copilot' } },
     ],
     mockData: () => ({
       onSelect: (method: string) => console.log('[Playground] Selected method:', method),
@@ -175,6 +196,62 @@ export const onboardingComponents: ComponentEntry[] = [
       onBack: noopHandler,
       onSubmitAuthCode: (code: string) => console.log('[Playground] Auth code:', code),
       onCancelOAuth: noopHandler,
+    }),
+  },
+  {
+    id: 'credentials-step-copilot',
+    name: 'Credentials - Copilot',
+    category: 'Onboarding',
+    description: 'GitHub Copilot OAuth device flow authentication',
+    component: CredentialsStep,
+    props: [
+      {
+        name: 'status',
+        description: 'OAuth status',
+        control: {
+          type: 'select',
+          options: [
+            { label: 'Idle', value: 'idle' },
+            { label: 'Validating', value: 'validating' },
+            { label: 'Success', value: 'success' },
+            { label: 'Error', value: 'error' },
+          ],
+        },
+        defaultValue: 'idle',
+      },
+      {
+        name: 'errorMessage',
+        description: 'Error message to display',
+        control: { type: 'string', placeholder: 'Error message' },
+        defaultValue: '',
+      },
+    ],
+    variants: [
+      { name: 'Initial', props: { apiSetupMethod: 'copilot_oauth', status: 'idle' } },
+      {
+        name: 'Device Code Shown',
+        props: {
+          apiSetupMethod: 'copilot_oauth',
+          status: 'validating',
+          copilotDeviceCode: { userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device' },
+        },
+      },
+      { name: 'Validating', props: { apiSetupMethod: 'copilot_oauth', status: 'validating' } },
+      { name: 'Success', props: { apiSetupMethod: 'copilot_oauth', status: 'success' } },
+      {
+        name: 'Error',
+        props: {
+          apiSetupMethod: 'copilot_oauth',
+          status: 'error',
+          errorMessage: 'Authorization failed. Please try again.',
+        },
+      },
+    ],
+    mockData: () => ({
+      apiSetupMethod: 'copilot_oauth',
+      onSubmit: noopHandler,
+      onStartOAuth: noopHandler,
+      onBack: noopHandler,
     }),
   },
   {

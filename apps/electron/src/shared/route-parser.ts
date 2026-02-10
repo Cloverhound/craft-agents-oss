@@ -276,7 +276,7 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
 export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
   if (parsed.navigator === 'settings') {
     const detailsType = parsed.details?.type || 'app'
-    return detailsType === 'app' ? 'settings' : `settings/${detailsType}`
+    return `settings/${detailsType}`
   }
 
   if (parsed.navigator === 'sources') {
@@ -770,7 +770,7 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
  */
 export function buildRouteFromNavigationState(state: NavigationState): string {
   if (state.navigator === 'settings') {
-    return state.subpage === 'app' ? 'settings' : `settings/${state.subpage}`
+    return `settings/${state.subpage}`
   }
 
   if (state.navigator === 'sources') {

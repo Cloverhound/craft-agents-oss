@@ -3,6 +3,9 @@ export * from './claude-agent.ts';
 
 // Export CodexAgent for direct use
 export { CodexAgent, CodexBackend } from './codex-agent.ts';
+
+// Export CopilotAgent for direct use
+export { CopilotAgent, CopilotBackend, resolveCopilotModelId } from './copilot-agent.ts';
 export * from './errors.ts';
 export * from './options.ts';
 

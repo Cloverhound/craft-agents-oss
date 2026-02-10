@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useTheme } from '@/hooks/useTheme'
 import type { ThemeOverrides } from '@config/theme'
-import { useSetAtom, useStore, useAtomValue } from 'jotai'
+import { useSetAtom, useStore, useAtomValue, useAtom } from 'jotai'
 import type { Session, Workspace, SessionEvent, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, SetupNeeds, TodoState, NewChatActionParams, ContentBadge, LlmConnectionWithStatus } from '../shared/types'
 import type { SessionOptions, SessionOptionUpdates } from './hooks/useSessionOptions'
 import { defaultSessionOptions, mergeSessionOptions } from './hooks/useSessionOptions'
@@ -25,6 +25,7 @@ import { NavigationProvider } from '@/contexts/NavigationContext'
 import { navigate, routes } from './lib/navigate'
 import { buildDefaultViewRoute } from '../shared/routes'
 import { stripMarkdown } from './utils/text'
+import { extractWorkspaceSlug } from '@craft-agent/shared/utils/workspace'
 import { initRendererPerf } from './lib/perf'
 import {
   initializeSessionsAtom,
@@ -36,6 +37,7 @@ import {
   sessionIdsAtom,
   backgroundTasksAtomFamily,
   extractSessionMeta,
+  windowWorkspaceIdAtom,
   type SessionMeta,
 } from '@/atoms/sessions'
 import { sourcesAtom } from '@/atoms/sources'
@@ -177,16 +179,15 @@ export default function App() {
   }, [updateSessionDirect])
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
-  // Window's workspace ID - fixed for this window (multi-window architecture)
-  const [windowWorkspaceId, setWindowWorkspaceId] = useState<string | null>(null)
+  // Window's workspace ID — shared atom so Root/ThemeProvider stays in sync on switch
+  const [windowWorkspaceId, setWindowWorkspaceId] = useAtom(windowWorkspaceIdAtom)
 
   // Derive workspace slug from path for SDK skill qualification
   const windowWorkspaceSlug = useMemo(() => {
     if (!windowWorkspaceId) return null
     const workspace = workspaces.find(w => w.id === windowWorkspaceId)
     if (!workspace?.rootPath) return windowWorkspaceId // Fallback to ID
-    const pathParts = workspace.rootPath.split('/').filter(Boolean)
-    return pathParts[pathParts.length - 1] || windowWorkspaceId
+    return extractWorkspaceSlug(workspace.rootPath, windowWorkspaceId)
   }, [windowWorkspaceId, workspaces])
 
   // LLM connections with authentication status (for provider selection)
@@ -845,6 +846,7 @@ export default function App() {
       // Step 4: Extract badges from mentions (sources/skills) with embedded icons
       // Badges are self-contained for display in UserMessageBubble and viewer
       // Merge with any externally provided badges (e.g., from EditPopover context badges)
+      // Use workspace slug (not UUID) for skill qualification - SDK expects "workspaceSlug:skillSlug"
       const mentionBadges: ContentBadge[] = windowWorkspaceSlug
         ? extractBadges(message, skills, sources, windowWorkspaceSlug)
         : []
@@ -1213,6 +1215,10 @@ export default function App() {
       store.set(sessionMetaMapAtom, new Map())
       store.set(sessionIdsAtom, [])
 
+      // 9. Navigate to allSessions view without a specific session selected
+      // This ensures the UI is in a clean state for the new workspace
+      navigate(routes.view.allSessions())
+
       // Note: Sessions and theme will reload automatically due to windowWorkspaceId dependency
       // in useEffect hooks
     }
@@ -1324,6 +1330,8 @@ export default function App() {
     // Bypass link interceptor — opens file directly in system editor.
     // Used by overlay header badges (when already viewing a file, "Open" should launch editor).
     onOpenFileExternal: linkInterceptor.openFileExternal,
+    // Read file contents as UTF-8 string (used by datatable/spreadsheet src field)
+    onReadFile: (path: string) => window.electronAPI.readFile(path),
     // Reveal a file in the system file manager (Finder on macOS, Explorer on Windows)
     onRevealInFinder: (path: string) => {
       window.electronAPI.showInFolder(path).catch(() => {})
@@ -1376,6 +1384,7 @@ export default function App() {
           isWaitingForCode={onboarding.isWaitingForCode}
           onSubmitAuthCode={onboarding.handleSubmitAuthCode}
           onCancelOAuth={onboarding.handleCancelOAuth}
+          copilotDeviceCode={onboarding.copilotDeviceCode}
           onBrowseGitBash={onboarding.handleBrowseGitBash}
           onUseGitBashPath={onboarding.handleUseGitBashPath}
           onRecheckGitBash={onboarding.handleRecheckGitBash}

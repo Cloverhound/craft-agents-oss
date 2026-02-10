@@ -7,6 +7,7 @@
  * - session.jsonl (main data in JSONL format: line 1 = header, lines 2+ = messages)
  * - attachments/ (file attachments)
  * - plans/ (plan files for Safe Mode)
+ * - data/ (transform_data tool output: JSON files for datatable/spreadsheet blocks)
  * - long_responses/ (full tool results that were summarized due to size limits)
  * - downloads/ (binary files downloaded from API sources: PDFs, images, archives, etc.)
  */
@@ -37,6 +38,7 @@ import type {
 } from './types.ts';
 import type { Plan } from '../agent/plan-types.ts';
 import { validateSessionStatus } from '../statuses/validation.ts';
+import { debug } from '../utils/debug.ts';
 import { getStatusCategory } from '../statuses/storage.ts';
 import { readSessionHeader, readSessionJsonl } from './jsonl.ts';
 import { sessionPersistenceQueue } from './persistence-queue.ts';
@@ -99,6 +101,11 @@ export function ensureSessionDir(workspaceRootPath: string, sessionId: string): 
   if (!existsSync(longResponsesDir)) {
     mkdirSync(longResponsesDir, { recursive: true });
   }
+  // Data directory for transform_data tool output (JSON files for datatable/spreadsheet)
+  const dataDir = join(sessionDir, 'data');
+  if (!existsSync(dataDir)) {
+    mkdirSync(dataDir, { recursive: true });
+  }
   // Downloads directory for binary files from API responses (PDFs, images, etc.)
   const downloadsDir = join(sessionDir, 'downloads');
   if (!existsSync(downloadsDir)) {
@@ -119,6 +126,13 @@ export function getSessionAttachmentsPath(workspaceRootPath: string, sessionId: 
  */
 export function getSessionPlansPath(workspaceRootPath: string, sessionId: string): string {
   return join(getSessionPath(workspaceRootPath, sessionId), 'plans');
+}
+
+/**
+ * Get the data directory for a session (transform_data tool output)
+ */
+export function getSessionDataPath(workspaceRootPath: string, sessionId: string): string {
+  return join(getSessionPath(workspaceRootPath, sessionId), 'data');
 }
 
 /**
@@ -424,7 +438,8 @@ function headerToMetadata(header: SessionHeader, workspaceRootPath: string): Ses
       parentSessionId: header.parentSessionId,
       siblingOrder: header.siblingOrder,
     };
-  } catch {
+  } catch (error) {
+    debug(`[sessions] Failed to convert header to metadata for session "${header?.id}" in ${workspaceRootPath}:`, error);
     return null;
   }
 }

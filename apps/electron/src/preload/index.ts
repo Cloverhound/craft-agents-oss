@@ -113,6 +113,10 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.UPDATE_DOWNLOAD_PROGRESS, handler)
   },
 
+  // Release notes
+  getReleaseNotes: () => ipcRenderer.invoke(IPC_CHANNELS.GET_RELEASE_NOTES) as Promise<string>,
+  getLatestReleaseVersion: () => ipcRenderer.invoke(IPC_CHANNELS.GET_LATEST_RELEASE_VERSION) as Promise<string | undefined>,
+
   // Shell operations
   openUrl: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.OPEN_URL, url),
   openFile: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.OPEN_FILE, path),
@@ -177,6 +181,19 @@ const api: ElectronAPI = {
   cancelChatGptOAuth: () => ipcRenderer.invoke(IPC_CHANNELS.CHATGPT_CANCEL_OAUTH),
   getChatGptAuthStatus: (connectionSlug: string) => ipcRenderer.invoke(IPC_CHANNELS.CHATGPT_GET_AUTH_STATUS, connectionSlug),
   chatGptLogout: (connectionSlug: string) => ipcRenderer.invoke(IPC_CHANNELS.CHATGPT_LOGOUT, connectionSlug),
+
+  // GitHub Copilot OAuth
+  startCopilotOAuth: (connectionSlug: string) => ipcRenderer.invoke(IPC_CHANNELS.COPILOT_START_OAUTH, connectionSlug),
+  cancelCopilotOAuth: () => ipcRenderer.invoke(IPC_CHANNELS.COPILOT_CANCEL_OAUTH),
+  getCopilotAuthStatus: (connectionSlug: string) => ipcRenderer.invoke(IPC_CHANNELS.COPILOT_GET_AUTH_STATUS, connectionSlug),
+  copilotLogout: (connectionSlug: string) => ipcRenderer.invoke(IPC_CHANNELS.COPILOT_LOGOUT, connectionSlug),
+  onCopilotDeviceCode: (callback: (data: { userCode: string; verificationUri: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { userCode: string; verificationUri: string }) => {
+      callback(data)
+    }
+    ipcRenderer.on(IPC_CHANNELS.COPILOT_DEVICE_CODE, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.COPILOT_DEVICE_CODE, handler)
+  },
 
   // Settings - API Setup
   setupLlmConnection: (setup: LlmConnectionSetup) =>
@@ -285,8 +302,8 @@ const api: ElectronAPI = {
   },
 
   // Skills
-  getSkills: (workspaceId: string) =>
-    ipcRenderer.invoke(IPC_CHANNELS.SKILLS_GET, workspaceId),
+  getSkills: (workspaceId: string, workingDirectory?: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SKILLS_GET, workspaceId, workingDirectory),
   getSkillFiles: (workspaceId: string, skillSlug: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.SKILLS_GET_FILES, workspaceId, skillSlug),
   deleteSkill: (workspaceId: string, skillSlug: string) =>
@@ -476,6 +493,12 @@ const api: ElectronAPI = {
     ipcRenderer.invoke(IPC_CHANNELS.POWER_GET_KEEP_AWAKE) as Promise<boolean>,
   setKeepAwakeWhileRunning: (enabled: boolean) =>
     ipcRenderer.invoke(IPC_CHANNELS.POWER_SET_KEEP_AWAKE, enabled),
+
+  // Appearance settings
+  getRichToolDescriptions: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPEARANCE_GET_RICH_TOOL_DESCRIPTIONS) as Promise<boolean>,
+  setRichToolDescriptions: (enabled: boolean) =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPEARANCE_SET_RICH_TOOL_DESCRIPTIONS, enabled),
 
   updateBadgeCount: (count: number) =>
     ipcRenderer.invoke(IPC_CHANNELS.BADGE_UPDATE, count),

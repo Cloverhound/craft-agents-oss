@@ -332,11 +332,12 @@ export function validateAll(workspaceId?: string, workspaceRoot?: string): Valid
     results.push(validateAllSources(workspaceId));
   }
 
-  // Include skill, status, label, and permissions validation if workspaceRoot is provided
+  // Include skill, status, label, hooks, and permissions validation if workspaceRoot is provided
   if (workspaceRoot) {
     results.push(validateAllSkills(workspaceRoot));
     results.push(validateStatuses(workspaceRoot));
     results.push(validateLabels(workspaceRoot));
+    results.push(validateHooks(workspaceRoot));
     results.push(validateAllPermissions(workspaceRoot));
   }
 
@@ -411,6 +412,31 @@ const LocalSourceConfigSchema = z.object({
   format: z.string().optional(),
 });
 
+// Source brand and action card schemas
+const SourceCardActionHandlerSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('api'), method: z.string(), path: z.string() }),
+  z.object({ type: z.literal('mcp'), tool: z.string() }),
+  z.object({ type: z.literal('copy') }),
+  z.object({ type: z.literal('open'), urlTemplate: z.string() }),
+]);
+
+const SourceCardActionSchema = z.object({
+  label: z.string().min(1),
+  variant: z.enum(['primary', 'secondary']),
+  handler: SourceCardActionHandlerSchema,
+});
+
+const SourceCardDefinitionSchema = z.object({
+  type: z.string().min(1),
+  label: z.string().min(1),
+  icon: z.string().min(1),
+  actions: z.array(SourceCardActionSchema),
+});
+
+const SourceBrandSchema = z.object({
+  color: EntityColorSchema.optional(),
+});
+
 export const FolderSourceConfigSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -421,6 +447,8 @@ export const FolderSourceConfigSchema = z.object({
   mcp: McpSourceConfigSchema.optional(),
   api: ApiSourceConfigSchema.optional(),
   local: LocalSourceConfigSchema.optional(),
+  brand: SourceBrandSchema.optional(),
+  cards: z.array(SourceCardDefinitionSchema).optional(),
   isAuthenticated: z.boolean().optional(),
   lastTestedAt: z.number().int().min(0).optional(),
   // Timestamps are optional - manually created configs may not have them
@@ -1308,6 +1336,7 @@ import {
   getSkillPermissionsPath,
   getAppPermissionsDir,
 } from '../agent/permissions-config.ts';
+import { validateHooksContent, validateHooks } from '../hooks-simple/index.ts';
 
 /**
  * Internal: Validate a single permissions.json file
@@ -1852,7 +1881,7 @@ export function formatValidationResult(result: ValidationResult): string {
  * Result of detecting what type of config file a path corresponds to.
  */
 export interface ConfigFileDetection {
-  type: 'source' | 'skill' | 'statuses' | 'labels' | 'permissions' | 'tool-icons';
+  type: 'source' | 'skill' | 'statuses' | 'labels' | 'permissions' | 'tool-icons' | 'hooks';
   /** Slug of the source or skill (if applicable) */
   slug?: string;
   /** Display file path for error messages */
@@ -1904,6 +1933,11 @@ export function detectConfigFileType(filePath: string, workspaceRootPath: string
   // Match: labels/config.json
   if (relativePath === 'labels/config.json') {
     return { type: 'labels', displayFile: 'labels/config.json' };
+  }
+
+  // Match: hooks.json (workspace-level)
+  if (relativePath === 'hooks.json') {
+    return { type: 'hooks', displayFile: 'hooks.json' };
   }
 
   // Match: permissions.json (workspace-level)
@@ -1965,6 +1999,8 @@ export function validateConfigFileContent(
       return validateStatusesContent(content);
     case 'labels':
       return validateLabelsContent(content);
+    case 'hooks':
+      return validateHooksContent(content);
     case 'permissions':
       return validatePermissionsContent(content, detection.displayFile);
     case 'tool-icons':

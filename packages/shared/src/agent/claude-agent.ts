@@ -11,7 +11,7 @@ import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, type Workspace, type AuthType, getDefaultLlmConnection, getLlmConnection } from '../config/storage.ts';
 import { isLocalMcpEnabled } from '../workspaces/storage.ts';
 import { loadPlanFromPath, type SessionConfig as Session } from '../sessions/storage.ts';
-import { DEFAULT_MODEL, isClaudeModel } from '../config/models.ts';
+import { DEFAULT_MODEL, isClaudeModel, getDefaultSummarizationModel } from '../config/models.ts';
 import { getCredentialManager } from '../credentials/index.ts';
 import { updatePreferences, loadPreferences, formatPreferencesForPrompt, type UserPreferences } from '../config/preferences.ts';
 import type { FileAttachment } from '../utils/files.ts';
@@ -28,6 +28,7 @@ import {
   cleanupSessionScopedTools,
   type AuthRequest,
 } from './session-scoped-tools.ts';
+import { type HookSystem, type SdkHookCallbackMatcher } from '../hooks-simple/index.ts';
 import {
   getPermissionMode,
   setPermissionMode,
@@ -45,6 +46,7 @@ import { type PermissionsContext, permissionsConfigCache } from './permissions-c
 import { getSessionPlansPath, getSessionPath } from '../sessions/storage.ts';
 import { readFileSync } from 'fs';
 import { expandPath } from '../utils/paths.ts';
+import { extractWorkspaceSlug } from '../utils/workspace.ts';
 import {
   ConfigWatcher,
   createConfigWatcher,
@@ -123,6 +125,8 @@ export interface ClaudeAgentConfig {
   };
   /** System prompt preset for mini agents ('default' | 'mini' or custom string) */
   systemPromptPreset?: 'default' | 'mini' | string;
+  /** Workspace-level HookSystem instance (shared across all agents in the workspace) */
+  hookSystem?: HookSystem;
 }
 
 // Permission request tracking
@@ -243,14 +247,9 @@ function handleUpdatePreferences(input: Record<string, unknown>): string {
     }
   }
 
-  // Handle notes (append to existing)
+  // Handle notes (replace)
   if (input.notes && typeof input.notes === 'string') {
-    const current = loadPreferences();
-    const existingNotes = current.notes || '';
-    const newNote = input.notes;
-    updates.notes = existingNotes
-      ? `${existingNotes}\n- ${newNote}`
-      : `- ${newNote}`;
+    updates.notes = input.notes;
   }
 
   // Check if anything was actually updated
@@ -279,7 +278,7 @@ const updateUserPreferencesTool = tool(
     region: z.string().optional().describe("The user's state/region/province"),
     country: z.string().optional().describe("The user's country"),
     language: z.string().optional().describe("The user's preferred language for responses"),
-    notes: z.string().optional().describe('Additional notes about the user that would be helpful to remember (preferences, context, etc.). This appends to existing notes.'),
+    notes: z.string().optional().describe('Additional notes about the user that would be helpful to remember (preferences, context, etc.). Replaces any existing notes.'),
   },
   async (args) => {
     try {
@@ -586,7 +585,6 @@ export class ClaudeAgent extends BaseAgent {
   }
 
   // isInSafeMode() is now inherited from BaseAgent
-  // shouldSuggestPlanning() and analyzePlanningNeed() are now inherited from BaseAgent
 
   /**
    * Check if a tool requires permission and handle it
@@ -947,8 +945,16 @@ export class ClaudeAgent extends BaseAgent {
         // This allows Safe Mode to properly allow read-only bash commands without SDK interference
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
-        // Use PreToolUse hook to intercept tool calls (plan mode blocking happens here)
-        hooks: {
+        // User hooks from hooks.json are merged with internal hooks
+        hooks: (() => {
+          // Build user-defined hooks from hooks.json using the workspace-level HookSystem
+          const userHooks = this.config.hookSystem?.buildSdkHooks() ?? {};
+          if (Object.keys(userHooks).length > 0) {
+            debug('[CraftAgent] User SDK hooks loaded:', Object.keys(userHooks).join(', '));
+          }
+
+          // Internal hooks for permission handling and logging
+          const internalHooks: Record<string, SdkHookCallbackMatcher[]> = {
           PreToolUse: [{
             hooks: [async (input) => {
               // Only handle PreToolUse events
@@ -1146,17 +1152,12 @@ export class ClaudeAgent extends BaseAgent {
               }
 
               // SKILL QUALIFICATION: Ensure skill names are fully-qualified
+              // SDK expects "workspaceSlug:skillSlug" format, NOT UUID
               if (input.tool_name === 'Skill') {
-                const skillInput = (modifiedInput || toolInput) as { skill?: string };
-                if (skillInput.skill) {
-                  const skillSlug = skillInput.skill.includes(':')
-                    ? skillInput.skill.split(':').pop()!
-                    : skillInput.skill;
-                  this.activeSkillSlugs.add(skillSlug);
-                }
+                const workspaceSlug = extractWorkspaceSlug(this.workspaceRootPath, this.config.workspace.id);
                 const skillResult = qualifySkillName(
                   modifiedInput || toolInput,
-                  this.config.workspace.id,
+                  workspaceSlug,
                   (msg) => this.onDebug?.(msg)
                 );
                 if (skillResult.modified) {
@@ -1433,7 +1434,23 @@ export class ClaudeAgent extends BaseAgent {
               return { continue: true };
             }],
           }],
-        },
+          };
+
+          // Merge internal hooks with user hooks from hooks.json
+          // Internal hooks run first (permissions), then user hooks
+          const mergedHooks: Record<string, SdkHookCallbackMatcher[]> = { ...internalHooks };
+          for (const [event, matchers] of Object.entries(userHooks)) {
+            if (mergedHooks[event]) {
+              // Append user hooks after internal hooks
+              mergedHooks[event] = [...mergedHooks[event], ...matchers];
+            } else {
+              // Add new event hooks
+              mergedHooks[event] = matchers;
+            }
+          }
+
+          return mergedHooks;
+        })(),
         // Continue from previous session if we have one (enables conversation history & auto compaction)
         // Skip resume on retry (after session expiry) to start fresh
         ...(!_isRetry && this.sessionId ? { resume: this.sessionId } : {}),
@@ -1513,12 +1530,14 @@ export class ClaudeAgent extends BaseAgent {
       const toolIndex = new ToolIndex();
       const emittedToolStarts = new Set<string>();
       const activeParentTools = new Set<string>();
+      // Session directory for reading tool metadata — prevents race condition when
+      // concurrent sessions clobber the singleton _sessionDir in toolMetadataStore.
+      const metadataSessionDir = getSessionPath(this.workspaceRootPath, sessionId);
 
       // Process SDK messages and convert to AgentEvents
       let receivedComplete = false;
       // Track text waiting for stop_reason from message_delta
       let pendingTextForStopReason: string | null = null;
-      let pendingUuidForStopReason: string | null = null;
       // Track current turn ID from message_start (correlation ID for grouping events)
       let currentTurnId: string | null = null;
       // Track whether we received any assistant content (for empty response detection)
@@ -1598,8 +1617,7 @@ export class ClaudeAgent extends BaseAgent {
             (text) => { pendingTextForStopReason = text; },
             currentTurnId,
             (id) => { currentTurnId = id; },
-            pendingUuidForStopReason,
-            (uuid) => { pendingUuidForStopReason = uuid; }
+            metadataSessionDir,
           );
           for (const event of events) {
             // Check for tool-not-found errors on inactive sources and attempt auto-activation
@@ -2398,8 +2416,7 @@ export class ClaudeAgent extends BaseAgent {
     setPendingText: (text: string | null) => void,
     turnId: string | null,
     setTurnId: (id: string | null) => void,
-    pendingUuid: string | null,
-    setPendingUuid: (uuid: string | null) => void
+    sessionDir?: string,
   ): Promise<AgentEvent[]> {
     const events: AgentEvent[] = [];
 
@@ -2477,6 +2494,7 @@ export class ClaudeAgent extends BaseAgent {
           emittedToolStarts,
           turnId || undefined,
           activeParentTools,
+          sessionDir,
         );
 
         // Track active Task tools for fallback parent assignment.
@@ -2496,12 +2514,6 @@ export class ClaudeAgent extends BaseAgent {
           // The assistant message arrives with stop_reason: null during streaming
           // The actual stop_reason comes in the message_delta event
           setPendingText(textContent);
-          // Capture the SDK's message UUID for edit/reset support
-          // The UUID identifies this assistant turn in the SDK transcript
-          const sdkMsgUuid = 'uuid' in message ? (message as any).uuid as string : undefined;
-          if (sdkMsgUuid) {
-            setPendingUuid(sdkMsgUuid);
-          }
         }
         break;
       }
@@ -2528,9 +2540,8 @@ export class ClaudeAgent extends BaseAgent {
             const isIntermediate = stopReason === 'tool_use';
             // SDK's parent_tool_use_id identifies the subagent context for this text
             // (null = main agent, Task ID = inside subagent)
-            events.push({ type: 'text_complete', text: pendingText, isIntermediate, turnId: turnId || undefined, parentToolUseId: message.parent_tool_use_id || undefined, sdkUuid: pendingUuid || undefined });
+            events.push({ type: 'text_complete', text: pendingText, isIntermediate, turnId: turnId || undefined, parentToolUseId: message.parent_tool_use_id || undefined });
             setPendingText(null);
-            setPendingUuid(null);
           }
         }
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -2556,6 +2567,7 @@ export class ClaudeAgent extends BaseAgent {
             emittedToolStarts,
             turnId || undefined,
             activeParentTools,
+            sessionDir,
           );
 
           // Track active Task tools for fallback parent assignment
@@ -2654,6 +2666,7 @@ export class ClaudeAgent extends BaseAgent {
             emittedToolStarts,
             turnId || undefined,
             activeParentTools,
+            sessionDir,
           );
 
           // Track active Task tools discovered via progress events
@@ -3096,6 +3109,44 @@ export class ClaudeAgent extends BaseAgent {
   }
 
   // getActiveSourceSlugs() is now inherited from BaseAgent
+
+  // ============================================================
+  // Mini Completion (for title generation and other quick tasks)
+  // ============================================================
+
+  /**
+   * Run a simple text completion using Claude SDK.
+   * No tools, empty system prompt - just text in → text out.
+   * Uses the same auth infrastructure as the main agent.
+   */
+  async runMiniCompletion(prompt: string): Promise<string | null> {
+    try {
+      const model = this.config.miniModel ?? getDefaultSummarizationModel();
+
+      const options = {
+        ...getDefaultOptions(),
+        model,
+        maxTurns: 1,
+        systemPrompt: 'Reply with ONLY the requested text. No explanation.', // Minimal - no Claude Code preset
+      };
+
+      let result = '';
+      for await (const msg of query({ prompt, options })) {
+        if (msg.type === 'assistant') {
+          for (const block of msg.message.content) {
+            if (block.type === 'text') {
+              result += block.text;
+            }
+          }
+        }
+      }
+
+      return result.trim() || null;
+    } catch (error) {
+      this.debug(`[runMiniCompletion] Failed: ${error}`);
+      return null;
+    }
+  }
 
   // ============================================================
 }

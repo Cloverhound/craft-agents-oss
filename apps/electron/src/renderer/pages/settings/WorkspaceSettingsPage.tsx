@@ -22,12 +22,13 @@ import { cn } from '@/lib/utils'
 import { routes } from '@/lib/navigate'
 import { Spinner } from '@craft-agent/ui'
 import { RenameDialog } from '@/components/ui/rename-dialog'
-import type { PermissionMode, WorkspaceSettings } from '../../../shared/types'
+import type { PermissionMode, WorkspaceSettings, LoadedSource } from '../../../shared/types'
 import { serializeChatFilter } from '../../../shared/types'
 import { PERMISSION_MODE_CONFIG } from '@craft-agent/shared/agent/mode-types'
 import { useStatuses } from '@/hooks/useStatuses'
 import { useLabels } from '@/hooks/useLabels'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
+import { SourceAvatar } from '@/components/ui/source-avatar'
 
 import {
   SettingsSection,
@@ -70,6 +71,11 @@ export default function WorkspaceSettingsPage() {
   const { statuses } = useStatuses(activeWorkspaceId)
   const { flatLabels } = useLabels(activeWorkspaceId)
 
+  // Default sources state
+  const [availableSources, setAvailableSources] = useState<LoadedSource[]>([])
+  const [enabledSourceSlugs, setEnabledSourceSlugs] = useState<string[]>([])
+
+
   // Mode cycling state
   const [enabledModes, setEnabledModes] = useState<PermissionMode[]>(['safe', 'ask', 'allow-all'])
   const [modeCyclingError, setModeCyclingError] = useState<string | null>(null)
@@ -95,6 +101,21 @@ export default function WorkspaceSettingsPage() {
           // Load cyclable permission modes from workspace settings
           if (settings.cyclablePermissionModes && settings.cyclablePermissionModes.length >= 2) {
             setEnabledModes(settings.cyclablePermissionModes)
+          }
+
+          // Load default source slugs
+          const savedSlugs = settings.enabledSourceSlugs ?? []
+
+          // Load available sources and auto-heal stale slugs
+          const sources = await window.electronAPI.getSources(activeWorkspaceId)
+          setAvailableSources(sources)
+          const validSlugs = new Set(sources.map(s => s.config.slug))
+          const healedSlugs = savedSlugs.filter(s => validSlugs.has(s))
+          setEnabledSourceSlugs(healedSlugs)
+
+          // Persist cleaned list if stale slugs were removed
+          if (healedSlugs.length !== savedSlugs.length) {
+            window.electronAPI.updateWorkspaceSetting(activeWorkspaceId, 'enabledSourceSlugs', healedSlugs)
           }
         }
 
@@ -131,6 +152,24 @@ export default function WorkspaceSettingsPage() {
     }
 
     loadWorkspaceSettings()
+  }, [activeWorkspaceId])
+
+  // Subscribe to live source changes (additions/removals)
+  useEffect(() => {
+    if (!window.electronAPI) return
+    const cleanup = window.electronAPI.onSourcesChanged((sources: LoadedSource[]) => {
+      setAvailableSources(sources)
+      // Auto-heal: remove slugs for sources that no longer exist
+      const validSlugs = new Set(sources.map(s => s.config.slug))
+      setEnabledSourceSlugs(prev => {
+        const healed = prev.filter(s => validSlugs.has(s))
+        if (healed.length !== prev.length && activeWorkspaceId) {
+          window.electronAPI.updateWorkspaceSetting(activeWorkspaceId, 'enabledSourceSlugs', healed)
+        }
+        return healed
+      })
+    })
+    return cleanup
   }, [activeWorkspaceId])
 
   // Save workspace setting
@@ -250,6 +289,17 @@ export default function WorkspaceSettingsPage() {
       await updateWorkspaceSetting('defaultChatFilter', filterStr === 'allChats' ? undefined : filterStr)
     },
     [updateWorkspaceSetting]
+  )
+
+  const handleSourceToggle = useCallback(
+    async (slug: string, checked: boolean) => {
+      const newSlugs = checked
+        ? [...enabledSourceSlugs, slug]
+        : enabledSourceSlugs.filter(s => s !== slug)
+      setEnabledSourceSlugs(newSlugs)
+      await updateWorkspaceSetting('enabledSourceSlugs', newSlugs)
+    },
+    [enabledSourceSlugs, updateWorkspaceSetting]
   )
 
   const handleModeToggle = useCallback(
@@ -466,6 +516,33 @@ export default function WorkspaceSettingsPage() {
                   searchPlaceholder="Search filters..."
                 />
               </SettingsCard>
+            </SettingsSection>
+
+            {/* Default Sources */}
+            <SettingsSection
+              title="Default Sources"
+              description="Sources auto-enabled for new sessions"
+            >
+              {availableSources.length > 0 ? (
+                <SettingsCard>
+                  {availableSources.map((source) => (
+                    <SettingsToggle
+                      key={source.config.slug}
+                      label={
+                        <span className="inline-flex items-center gap-2">
+                          <SourceAvatar source={source} size="xs" />
+                          {source.config.name}
+                        </span>
+                      }
+                      description={source.config.tagline}
+                      checked={enabledSourceSlugs.includes(source.config.slug)}
+                      onCheckedChange={(checked) => handleSourceToggle(source.config.slug, checked)}
+                    />
+                  ))}
+                </SettingsCard>
+              ) : (
+                <p className="text-sm text-muted-foreground">No sources configured in this workspace.</p>
+              )}
             </SettingsSection>
 
             {/* Advanced */}

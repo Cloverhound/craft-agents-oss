@@ -80,11 +80,18 @@ export function handleToolResult(
   const toolIndex = findToolMessage(session.messages, event.toolUseId)
 
   if (toolIndex !== -1) {
+    // Detect "persisted output" - SDK marks as error but data was actually saved successfully
+    const isPersistedOutput = event.isError && (
+      event.result?.includes('Output has been saved to') ||
+      event.result?.includes('Full output saved to')
+    )
+
     // Update existing tool message
     let updatedSession = updateMessageAt(session, toolIndex, {
       toolResult: event.result,
       toolStatus: 'completed',
-      isError: event.isError,
+      isError: isPersistedOutput ? false : event.isError,
+      errorCode: isPersistedOutput ? 'response_too_large' : undefined,
     })
 
     // Safety net: when a parent Task completes, auto-complete any still-pending child tools.
@@ -119,6 +126,13 @@ export function handleToolResult(
   // This is normal for background subagent child tools where tool_result arrives
   // without a prior tool_start. If tool_start arrives later, findToolMessage will
   // locate this message by toolUseId and update it with input/intent/displayMeta.
+
+  // Detect "persisted output" - SDK marks as error but data was actually saved successfully
+  const isPersistedOutput = event.isError && (
+    event.result?.includes('Output has been saved to') ||
+    event.result?.includes('Full output saved to')
+  )
+
   const toolMessage: Message = {
     id: generateMessageId(),
     role: 'tool',
@@ -128,7 +142,8 @@ export function handleToolResult(
     toolName: event.toolName,
     toolResult: event.result,
     toolStatus: 'completed',
-    isError: event.isError,
+    isError: isPersistedOutput ? false : event.isError,
+    errorCode: isPersistedOutput ? 'response_too_large' : undefined,
     turnId: event.turnId,
     parentToolUseId: event.parentToolUseId,
   }

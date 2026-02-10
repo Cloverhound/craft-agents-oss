@@ -63,15 +63,16 @@ export class WindowManager {
     const { workspaceId, focused = false, initialDeepLink, restoreUrl } = options
 
     // Load platform-specific app icon
+    // In packaged app, resources are at dist/resources/ (same level as __dirname)
+    // In dev, resources are at ../resources/ (sibling of dist/)
     const getIconPath = () => {
-      const resourcesDir = join(__dirname, '../resources')
-      if (process.platform === 'darwin') {
-        return join(resourcesDir, 'icon.icns')
-      } else if (process.platform === 'win32') {
-        return join(resourcesDir, 'icon.ico')
-      } else {
-        return join(resourcesDir, 'icon.png')
-      }
+      const iconName = process.platform === 'darwin' ? 'icon.icns'
+        : process.platform === 'win32' ? 'icon.ico'
+        : 'icon.png'
+      return [
+        join(__dirname, 'resources', iconName),
+        join(__dirname, '../resources', iconName),
+      ].find(p => existsSync(p)) ?? join(__dirname, '../resources', iconName)
     }
 
     const iconPath = getIconPath()
@@ -217,9 +218,21 @@ export class WindowManager {
 
     // Fallback: if the renderer fails to load (e.g. stale path, disk error),
     // recover gracefully by loading the default state instead of showing a white screen. See #13.
+    // In dev mode, retry the Vite dev server (it may not be ready yet) instead of falling back
+    // to file:// which doesn't exist during development.
+    let failLoadRetries = 0
     window.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
-      windowLog.warn('Failed to load renderer, falling back to default state:', errorCode, errorDescription)
-      window.loadFile(join(__dirname, 'renderer/index.html'), { query: { workspaceId } })
+      windowLog.warn('Failed to load renderer:', errorCode, errorDescription)
+      if (VITE_DEV_SERVER_URL && failLoadRetries < 5) {
+        failLoadRetries++
+        windowLog.info(`Retrying Vite dev server (attempt ${failLoadRetries}/5)...`)
+        setTimeout(() => {
+          const params = new URLSearchParams({ workspaceId }).toString()
+          window.loadURL(`${VITE_DEV_SERVER_URL}?${params}`)
+        }, 1000)
+      } else {
+        window.loadFile(join(__dirname, 'renderer/index.html'), { query: { workspaceId } })
+      }
     })
 
     // If an initial deep link was provided, navigate to it after the window is ready

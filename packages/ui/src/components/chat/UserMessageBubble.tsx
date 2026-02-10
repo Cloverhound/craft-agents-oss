@@ -244,7 +244,7 @@ function renderContentWithBadges(
         mode="minimal"
         onUrlClick={onUrlClick}
         onFileClick={onFileClick}
-        className="text-sm [&_a]:underline [&_code]:bg-foreground/10"
+        className="text-sm [&_a]:underline [&_code]:bg-foreground/10 [&_p]:whitespace-pre-wrap"
       >
         {content}
       </Markdown>

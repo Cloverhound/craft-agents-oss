@@ -714,6 +714,13 @@ export const IPC_CHANNELS = {
   CHATGPT_GET_AUTH_STATUS: 'chatgpt:getAuthStatus',
   CHATGPT_LOGOUT: 'chatgpt:logout',
 
+  // GitHub Copilot OAuth
+  COPILOT_START_OAUTH: 'copilot:startOAuth',
+  COPILOT_CANCEL_OAUTH: 'copilot:cancelOAuth',
+  COPILOT_GET_AUTH_STATUS: 'copilot:getAuthStatus',
+  COPILOT_LOGOUT: 'copilot:logout',
+  COPILOT_DEVICE_CODE: 'copilot:deviceCode',
+
   // Settings - API Setup
   SETUP_LLM_CONNECTION: 'settings:setupLlmConnection',
   SETTINGS_TEST_API_CONNECTION: 'settings:testApiConnection',
@@ -850,12 +857,20 @@ export const IPC_CHANNELS = {
   POWER_GET_KEEP_AWAKE: 'power:getKeepAwake',
   POWER_SET_KEEP_AWAKE: 'power:setKeepAwake',
 
+  // Appearance settings
+  APPEARANCE_GET_RICH_TOOL_DESCRIPTIONS: 'appearance:getRichToolDescriptions',
+  APPEARANCE_SET_RICH_TOOL_DESCRIPTIONS: 'appearance:setRichToolDescriptions',
+
   BADGE_UPDATE: 'badge:update',
   BADGE_CLEAR: 'badge:clear',
   BADGE_SET_ICON: 'badge:setIcon',
   BADGE_DRAW: 'badge:draw',  // Broadcast: { count: number, iconDataUrl: string }
   WINDOW_FOCUS_STATE: 'window:focusState',  // Broadcast: boolean (isFocused)
   WINDOW_GET_FOCUS_STATE: 'window:getFocusState',
+
+  // Release notes
+  GET_RELEASE_NOTES: 'releaseNotes:get',
+  GET_LATEST_RELEASE_VERSION: 'releaseNotes:getLatestVersion',
 
   // Git operations
   GET_GIT_BRANCH: 'git:getBranch',
@@ -969,6 +984,10 @@ export interface ElectronAPI {
   onUpdateAvailable(callback: (info: UpdateInfo) => void): () => void
   onUpdateDownloadProgress(callback: (progress: number) => void): () => void
 
+  // Release notes
+  getReleaseNotes(): Promise<string>
+  getLatestReleaseVersion(): Promise<string | undefined>
+
   // Shell operations
   openUrl(url: string): Promise<void>
   openFile(path: string): Promise<void>
@@ -1008,6 +1027,13 @@ export interface ElectronAPI {
   cancelChatGptOAuth(): Promise<{ success: boolean }>
   getChatGptAuthStatus(connectionSlug: string): Promise<{ authenticated: boolean; expiresAt?: number; hasRefreshToken?: boolean }>
   chatGptLogout(connectionSlug: string): Promise<{ success: boolean }>
+
+  // GitHub Copilot OAuth
+  startCopilotOAuth(connectionSlug: string): Promise<{ success: boolean; error?: string }>
+  cancelCopilotOAuth(): Promise<{ success: boolean }>
+  getCopilotAuthStatus(connectionSlug: string): Promise<{ authenticated: boolean }>
+  copilotLogout(connectionSlug: string): Promise<{ success: boolean }>
+  onCopilotDeviceCode(callback: (data: { userCode: string; verificationUri: string }) => void): () => void
 
   /** Unified LLM connection setup */
   setupLlmConnection(setup: LlmConnectionSetup): Promise<{ success: boolean; error?: string }>
@@ -1064,7 +1090,7 @@ export interface ElectronAPI {
   onDefaultPermissionsChanged(callback: () => void): () => void
 
   // Skills
-  getSkills(workspaceId: string): Promise<LoadedSkill[]>
+  getSkills(workspaceId: string, workingDirectory?: string): Promise<LoadedSkill[]>
   getSkillFiles?(workspaceId: string, skillSlug: string): Promise<SkillFile[]>
   deleteSkill(workspaceId: string, skillSlug: string): Promise<void>
   openSkillInEditor(workspaceId: string, skillSlug: string): Promise<void>
@@ -1151,6 +1177,10 @@ export interface ElectronAPI {
   // Power settings
   getKeepAwakeWhileRunning(): Promise<boolean>
   setKeepAwakeWhileRunning(enabled: boolean): Promise<void>
+
+  // Appearance settings
+  getRichToolDescriptions(): Promise<boolean>
+  setRichToolDescriptions(enabled: boolean): Promise<void>
 
   updateBadgeCount(count: number): Promise<void>
   clearBadgeCount(): Promise<void>
@@ -1255,6 +1285,8 @@ export interface WorkspaceSettings {
   defaultChatFilter?: string
   /** Default LLM connection slug for new sessions in this workspace */
   defaultLlmConnection?: string
+  /** Source slugs to auto-enable for new sessions */
+  enabledSourceSlugs?: string[]
 }
 
 /**

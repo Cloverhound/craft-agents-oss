@@ -456,10 +456,10 @@ export interface OAuthMetadata {
 }
 
 /**
- * Try to fetch OAuth metadata from a specific URL.
+ * Try to fetch OAuth authorization server metadata from a specific URL.
  * Returns the metadata if successful, null if not found or error.
  */
-async function tryFetchMetadata(
+async function tryFetchAuthServerMetadata(
   url: string,
   onLog?: (message: string) => void
 ): Promise<OAuthMetadata | null> {
@@ -503,36 +503,37 @@ function isUrlSafeToFetch(urlString: string): { safe: boolean; reason?: string }
   try {
     url = new URL(urlString);
   } catch {
-    return { safe: false, reason: "Invalid URL" };
+    return { safe: false, reason: 'Invalid URL' };
   }
 
   // Must be HTTPS (allow HTTP only for localhost in dev)
-  if (url.protocol !== "https:") {
-    return { safe: false, reason: "URL must use HTTPS" };
+  if (url.protocol !== 'https:') {
+    return { safe: false, reason: 'URL must use HTTPS' };
   }
 
   // Check hostname for private IP ranges
   const hostname = url.hostname.toLowerCase();
 
   // Block localhost variants
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") {
-    return { safe: false, reason: "Localhost not allowed" };
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return { safe: false, reason: 'Localhost not allowed' };
   }
 
   // Block private IP ranges (basic check - covers most cases)
   // This catches: 10.x.x.x, 172.16-31.x.x, 192.168.x.x, 169.254.x.x
   const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (ipMatch && ipMatch[1] && ipMatch[2]) {
+  if (ipMatch) {
     const a = Number(ipMatch[1]);
     const b = Number(ipMatch[2]);
     if (
+      a === 0 ||                             // 0.0.0.0/8
       a === 10 ||                           // 10.0.0.0/8
       a === 127 ||                          // 127.0.0.0/8
       (a === 172 && b >= 16 && b <= 31) ||  // 172.16.0.0/12
       (a === 192 && b === 168) ||           // 192.168.0.0/16
       (a === 169 && b === 254)              // 169.254.0.0/16 (link-local/AWS metadata)
     ) {
-      return { safe: false, reason: "Private IP range not allowed" };
+      return { safe: false, reason: 'Private IP range not allowed' };
     }
   }
 
@@ -543,16 +544,16 @@ function isUrlSafeToFetch(urlString: string): { safe: boolean; reason?: string }
  * Type guard for ProtectedResourceMetadata
  */
 function isProtectedResourceMetadata(data: unknown): data is ProtectedResourceMetadata {
-  if (typeof data !== "object" || data === null) return false;
+  if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
 
   // resource is required
-  if (typeof obj.resource !== "string") return false;
+  if (typeof obj.resource !== 'string') return false;
 
   // authorization_servers is optional but must be string array if present
   if (obj.authorization_servers !== undefined) {
     if (!Array.isArray(obj.authorization_servers)) return false;
-    if (!obj.authorization_servers.every(s => typeof s === "string")) return false;
+    if (!obj.authorization_servers.every(s => typeof s === 'string')) return false;
   }
 
   return true;
@@ -584,7 +585,7 @@ async function fetchWithTimeout(
  * Normalize URL by removing trailing slash
  */
 function normalizeUrl(url: string): string {
-  return url.endsWith("/") ? url.slice(0, -1) : url;
+  return url.endsWith('/') ? url.slice(0, -1) : url;
 }
 
 /**
@@ -638,11 +639,7 @@ async function fetchProtectedResourceMetadata(
       return null;
     }
 
-    const authServer = data.authorization_servers[0];
-    if (!authServer) {
-      onLog?.(`  ✗ Empty authorization server in metadata`);
-      return null;
-    }
+    const authServer = data.authorization_servers[0]!;
 
     // Validate the auth server URL too
     const authServerCheck = isUrlSafeToFetch(authServer);
@@ -652,9 +649,9 @@ async function fetchProtectedResourceMetadata(
     }
 
     onLog?.(`  ✓ Found authorization server`);
-    return authServer ?? null;
+    return authServer;
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
+    if (error instanceof Error && error.name === 'AbortError') {
       onLog?.(`  ✗ Request timeout fetching protected resource metadata`);
     } else {
       const msg = error instanceof Error ? error.message : String(error);
@@ -682,14 +679,14 @@ async function discoverViaProtectedResource(
     // Try HEAD first, fall back to GET if HEAD returns 405
     let response: Response;
     try {
-      response = await fetchWithTimeout(mcpUrl, { method: "HEAD" });
+      response = await fetchWithTimeout(mcpUrl, { method: 'HEAD' });
       // Some servers don't support HEAD, fall back to GET
       if (response.status === 405) {
         onLog?.(`  HEAD not supported, trying GET...`);
-        response = await fetchWithTimeout(mcpUrl, { method: "GET" });
+        response = await fetchWithTimeout(mcpUrl, { method: 'GET' });
       }
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
+      if (error instanceof Error && error.name === 'AbortError') {
         onLog?.(`  ✗ Request timeout`);
       }
       return null;
@@ -701,7 +698,7 @@ async function discoverViaProtectedResource(
       return null;
     }
 
-    const wwwAuth = response.headers.get("www-authenticate");
+    const wwwAuth = response.headers.get('www-authenticate');
     const resourceMetadataUrl = parseResourceMetadataFromHeader(wwwAuth);
 
     if (!resourceMetadataUrl) {
@@ -727,7 +724,7 @@ async function discoverViaProtectedResource(
     // Fetch authorization server metadata (normalize URL to avoid double slashes)
     const normalizedAuthServer = normalizeUrl(authServerUrl);
     const authServerMetadataUrl = `${normalizedAuthServer}/.well-known/oauth-authorization-server`;
-    return await tryFetchMetadata(authServerMetadataUrl, onLog);
+    return await tryFetchAuthServerMetadata(authServerMetadataUrl, onLog);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     onLog?.(`  ✗ RFC 9728 discovery failed: ${msg}`);
@@ -740,8 +737,9 @@ async function discoverViaProtectedResource(
  * Returns the first successful metadata, or null if all fail.
  *
  * Discovery order:
- * 1. Origin root: `{origin}/.well-known/oauth-authorization-server`
- * 2. Path-scoped: `{origin}/.well-known/oauth-authorization-server{pathname}`
+ * 1. RFC 9728: Parse resource_metadata from WWW-Authenticate header on 401
+ * 2. Origin root: `{origin}/.well-known/oauth-authorization-server`
+ * 3. Path-scoped: `{origin}/.well-known/oauth-authorization-server{pathname}`
  */
 export async function discoverOAuthMetadata(
   mcpUrl: string,
@@ -757,16 +755,22 @@ export async function discoverOAuthMetadata(
 
   onLog?.(`Discovering OAuth metadata for ${mcpUrl}`);
 
-  // Try locations in order of likelihood
+  // 1. Try RFC 9728 protected resource discovery first (handles Craft MCP and other compliant servers)
+  const rfc9728Metadata = await discoverViaProtectedResource(mcpUrl, onLog);
+  if (rfc9728Metadata) {
+    return rfc9728Metadata;
+  }
+
+  // 2. Fall back to RFC 8414 discovery locations
   const candidates = [
-    // 1. Origin root (most common for MCP servers)
+    // Origin root (most common for MCP servers)
     `${url.origin}/.well-known/oauth-authorization-server`,
-    // 2. Path-scoped (RFC 8414 allows this)
+    // Path-scoped (RFC 8414 allows this)
     `${url.origin}/.well-known/oauth-authorization-server${url.pathname}`,
   ];
 
   for (const candidate of candidates) {
-    const metadata = await tryFetchMetadata(candidate, onLog);
+    const metadata = await tryFetchAuthServerMetadata(candidate, onLog);
     if (metadata) {
       return metadata;
     }

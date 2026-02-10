@@ -145,6 +145,10 @@ export class TestAgent extends BaseAgent {
     this.respondToPermissionCalls.push({ requestId, allowed, alwaysAllow });
   }
 
+  async runMiniCompletion(_prompt: string): Promise<string | null> {
+    return 'Test Response';
+  }
+
   // Helper to reset tracking
   resetTracking(): void {
     this.chatCalls = [];
