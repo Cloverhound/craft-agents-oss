@@ -52,6 +52,7 @@ function createMockApiSource(overrides: Partial<LoadedSource['config']> = {}): L
         baseUrl: 'https://api.example.com',
         authType: 'bearer',
       },
+      isAuthenticated: true,
       ...overrides,
     },
     guide: { raw: 'API guide content' },
