@@ -1850,7 +1850,9 @@ export class CodexAgent extends BaseAgent {
 
     // Strip all [bracket] mentions from the message text.
     // Codex doesn't understand [skill:...], [source:...] etc. annotations.
-    const cleanMessage = stripAllMentions(message);
+    // REMOVED: This doesn't seem to be in the prod app and breaks Codex skill detection.
+    // Not sure what it was for and how it remained in this repo.
+    const cleanMessage = message; //stripAllMentions(message);
 
     // ============================================================
     // CONTEXT INJECTION (matching ClaudeAgent)
