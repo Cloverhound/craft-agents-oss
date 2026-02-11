@@ -445,6 +445,22 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     return sessionManager.deleteSession(sessionId)
   })
 
+  // Write data files into a session's data/ folder (for app context injection)
+  ipcMain.handle(IPC_CHANNELS.WRITE_SESSION_DATA, async (_event, sessionId: string, files: Record<string, string>) => {
+    validateSessionId(sessionId)
+    const sessionPath = sessionManager.getSessionPath(sessionId)
+    if (!sessionPath) throw new Error(`Session ${sessionId} not found`)
+    const dataDir = join(sessionPath, 'data')
+    await mkdir(dataDir, { recursive: true })
+    await Promise.all(
+      Object.entries(files).map(([filename, content]) => {
+        // Sanitize filename: strip path separators to prevent directory traversal
+        const safeName = basename(filename)
+        return writeFile(join(dataDir, safeName), content, 'utf-8')
+      })
+    )
+  })
+
   // Send a message to a session (with optional file attachments)
   // Note: We intentionally don't await here - the response is streamed via events.
   // The IPC handler returns immediately, and results come through SESSION_EVENT channel.

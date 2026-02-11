@@ -9,6 +9,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from '
 import { join, dirname } from 'path';
 import { spawn } from 'child_process';
 import type { CompileResult } from './types.ts';
+// Subprocess esbuild — avoids bundled-context native binary issue (see module for details)
+import { compileEsbuildViaSubprocess } from './esbuild-subprocess.ts';
 
 /**
  * Resolve the node_modules paths that esbuild should use for package resolution.
@@ -254,20 +256,10 @@ export async function compileApp(appPath: string): Promise<CompileResult> {
     mkdirSync(distDir, { recursive: true });
   }
 
-  // Step 1: esbuild bundle
-  try {
-    const esbuild = await import('esbuild');
-    const options = buildEsbuildOptions(appPath);
-    const result = await esbuild.build(options);
-
-    if (result.errors.length > 0) {
-      for (const err of result.errors) {
-        errors.push(err.text);
-      }
-    }
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : 'esbuild compilation failed';
-    errors.push(msg);
+  // Step 1: esbuild bundle (via subprocess — see esbuild-subprocess.ts)
+  const esbuildResult = await compileEsbuildViaSubprocess(appPath, buildEsbuildOptions(appPath), getNodePaths());
+  if (!esbuildResult.success) {
+    errors.push(...esbuildResult.errors);
     return {
       success: false,
       errors,

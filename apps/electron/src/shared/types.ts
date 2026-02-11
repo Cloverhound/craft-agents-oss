@@ -646,6 +646,8 @@ export const IPC_CHANNELS = {
   WATCH_SESSION_FILES: 'sessions:watchFiles',      // Start watching session directory
   UNWATCH_SESSION_FILES: 'sessions:unwatchFiles',  // Stop watching
   SESSION_FILES_CHANGED: 'sessions:filesChanged',  // Event: main → renderer
+  // Write data files into a session's data/ folder (for app context injection)
+  WRITE_SESSION_DATA: 'sessions:writeData',
 
   // Theme
   GET_SYSTEM_THEME: 'theme:getSystemPreference',
@@ -930,6 +932,8 @@ export interface ElectronAPI {
   getTaskOutput(taskId: string): Promise<string | null>
   respondToPermission(sessionId: string, requestId: string, allowed: boolean, alwaysAllow: boolean): Promise<boolean>
   respondToCredential(sessionId: string, requestId: string, response: CredentialResponse): Promise<boolean>
+  /** Write data files into a session's data/ folder (for app context injection) */
+  writeSessionData(sessionId: string, files: Record<string, string>): Promise<void>
 
   // Consolidated session command handler
   sessionCommand(sessionId: string, command: SessionCommand): Promise<void | ShareResult | RefreshTitleResult | SessionFamily | { count: number }>

@@ -11,6 +11,8 @@ import { useNavigation } from '@/contexts/NavigationContext'
 import type { Route } from '../../shared/routes'
 import type { LoadedApp } from '@craft-agent/shared/apps'
 import { Loader2 } from 'lucide-react'
+import { useAppShellContext } from '@/context/AppShellContext'
+import { handleCreateSessionWithContext } from '@/lib/session-context-bridge'
 
 export interface AppHostPageProps {
   appSlug: string
@@ -31,6 +33,7 @@ export default function AppHostPage({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const { navigate } = useNavigation()
+  const { onCreateSession } = useAppShellContext()
 
   // Load app data
   useEffect(() => {
@@ -106,6 +109,23 @@ export default function AppHostPage({
             type: 'response',
             requestId: message.requestId,
             result: { ok: true },
+          }
+          break
+        }
+
+        case 'APP_CREATE_SESSION_WITH_CONTEXT': {
+          // Create a session with context data written to its data/ folder.
+          // Delegated to additive module for merge safety.
+          const result = await handleCreateSessionWithContext(
+            message as any,
+            workspaceId,
+            navigate,
+            onCreateSession,
+          )
+          response = {
+            type: 'response',
+            requestId: message.requestId,
+            result,
           }
           break
         }

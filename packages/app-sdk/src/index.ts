@@ -33,6 +33,8 @@ export { useTheme } from './hooks/useTheme.ts';
 export type { AppTheme } from './hooks/useTheme.ts';
 export { useAppMode } from './hooks/useAppMode.ts';
 export type { AppMode, UseAppModeResult } from './hooks/useAppMode.ts';
+export { useCreateSession } from './hooks/useCreateSession.ts';
+export type { CreateSessionOptions, CreateSessionResult, UseCreateSessionResult } from './hooks/useCreateSession.ts';
 
 // Components
 export { Table, Badge, Button, Card, EmptyState, Spinner } from './components/index.ts';
