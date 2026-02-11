@@ -95,6 +95,7 @@ import { handleLargeResponse, estimateTokens, TOKEN_LIMIT } from '../utils/large
 
 // System prompt for Craft Agent context
 import { getSystemPrompt } from '../prompts/system.ts';
+import { getCredentialProxyEnv } from './options.ts';
 
 // Credential manager for token storage
 import { getCredentialManager } from '../credentials/manager.ts';
@@ -278,6 +279,7 @@ export class CopilotAgent extends BaseAgent {
 
     // Build env for Copilot CLI subprocess
     const clientEnv: Record<string, string | undefined> = { ...process.env };
+    Object.assign(clientEnv, getCredentialProxyEnv());
 
     // Preload network interceptor for tool metadata capture
     if (this.config.copilotInterceptorPath) {

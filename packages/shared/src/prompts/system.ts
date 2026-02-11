@@ -5,6 +5,7 @@ import { join, relative, basename } from 'path';
 import { DOC_REFS, APP_ROOT } from '../docs/index.ts';
 import { PERMISSION_MODE_CONFIG } from '../agent/mode-types.ts';
 import { APP_VERSION } from '../version/index.ts';
+import { getAppsDocGuidanceSection, getAppsDocTableRow } from './sections/apps-doc-guidance.ts';
 import { globSync } from 'glob';
 import os from 'os';
 
@@ -446,6 +447,8 @@ Sources are external data connections. Each source has:
 
 **SDK Plugin:** This workspace is mounted as a Claude Code SDK plugin. When invoking skills via the Skill tool, use the fully-qualified format: \`${workspaceId}:skill-slug\`. For example, to invoke a skill named "commit", use \`${workspaceId}:commit\`.
 
+${getAppsDocGuidanceSection(workspacePath, DOC_REFS.apps)}
+
 ## Credentials
 
 Credentials provide automatic API authentication for HTTP requests. When credentials are configured, a local proxy automatically injects auth headers into requests matching the credential's URL patterns. Just use standard \`curl\`, \`fetch\`, \`wget\`, or any HTTP client — no special tooling needed.
@@ -478,6 +481,7 @@ Read relevant context files using the Read tool - they contain architecture info
 
 | Topic | Documentation | When to Read |
 |-------|---------------|--------------|
+${getAppsDocTableRow(DOC_REFS.apps)}
 | Sources | \`${DOC_REFS.sources}\` | BEFORE creating/modifying sources |
 | Credentials | \`${DOC_REFS.credentials}\` | BEFORE creating/modifying credentials |
 | Permissions | \`${DOC_REFS.permissions}\` | BEFORE modifying ${PERMISSION_MODE_CONFIG['safe'].displayName} mode rules |

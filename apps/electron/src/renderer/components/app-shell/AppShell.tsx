@@ -27,6 +27,7 @@ import {
   HelpCircle,
   ExternalLink,
   ListTodo,
+  LayoutGrid,
   Cake,
 } from "lucide-react"
 import { PanelRightRounded } from "../icons/PanelRightRounded"
@@ -88,6 +89,7 @@ import { sessionMetaMapAtom, type SessionMeta } from "@/atoms/sessions"
 import { sourcesAtom } from "@/atoms/sources"
 import { skillsAtom } from "@/atoms/skills"
 import { credentialsAtom } from "@/atoms/credentials"
+import { appsAtom } from "@/atoms/apps"
 import { type TodoStateId, type TodoState, statusConfigsToTodoStates } from "@/config/todo-states"
 import { useStatuses } from "@/hooks/useStatuses"
 import { useLabels } from "@/hooks/useLabels"
@@ -110,6 +112,7 @@ import {
   isSkillsNavigation,
   isCredentialsNavigation,
   isQueueNavigation,
+  isAppsNavigation,
   type NavigationState,
   type SessionFilter,
 } from "@/contexts/NavigationContext"
@@ -118,6 +121,7 @@ import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
 import { CredentialsListPanel } from "./CredentialsListPanel"
 import { QueueListPanel } from "./QueueListPanel"
+import { AppsListPanel } from "./AppsListPanel"
 import { PanelHeader } from "./PanelHeader"
 import { EditPopover, getEditConfig, type EditContextKey } from "@/components/ui/EditPopover"
 import { getDocUrl } from "@craft-agent/shared/docs/doc-links"
@@ -770,6 +774,14 @@ function AppShellContent({
     setCredentialsAtom(credentials)
   }, [credentials, setCredentialsAtom])
 
+  // Custom apps state (workspace-scoped)
+  const [apps, setApps] = React.useState<import('@craft-agent/shared/apps').LoadedApp[]>([])
+  // Sync apps to atom for NavigationContext auto-selection
+  const setAppsAtom = useSetAtom(appsAtom)
+  React.useEffect(() => {
+    setAppsAtom(apps)
+  }, [apps, setAppsAtom])
+
   // Whether local MCP servers are enabled (affects stdio source status)
   const [localMcpEnabled, setLocalMcpEnabled] = React.useState(true)
 
@@ -865,6 +877,31 @@ function AppShellContent({
     })
     return cleanup
   }, [])
+
+  // Load custom apps from backend on mount
+  React.useEffect(() => {
+    if (!activeWorkspaceId) return
+    window.electronAPI.getApps(activeWorkspaceId).then((loaded) => {
+      setApps(loaded || [])
+    }).catch(err => {
+      console.error('[Chat] Failed to load apps:', err)
+    })
+  }, [activeWorkspaceId])
+
+  // Subscribe to live app updates
+  React.useEffect(() => {
+    if (!activeWorkspaceId) return
+    const cleanup = window.electronAPI.onAppsChanged?.((changedWorkspaceId) => {
+      if (changedWorkspaceId === activeWorkspaceId) {
+        window.electronAPI.getApps(activeWorkspaceId).then((loaded) => {
+          setApps(loaded || [])
+        }).catch(err => {
+          console.error('[Chat] Failed to reload apps:', err)
+        })
+      }
+    })
+    return cleanup
+  }, [activeWorkspaceId])
 
   // Handle session source selection changes
   const handleSessionSourcesChange = React.useCallback(async (sessionId: string, sourceSlugs: string[]) => {
@@ -1648,6 +1685,26 @@ function AppShellContent({
     navigate(routes.view.settings(subpage))
   }, [])
 
+  // Handler for apps view
+  const handleAppsClick = useCallback(() => {
+    navigate(routes.view.apps())
+  }, [])
+
+  // Handler for app selection
+  const handleAppSelect = useCallback((app: import('@craft-agent/shared/apps').LoadedApp) => {
+    navigate(routes.view.apps(app.config.slug))
+  }, [])
+
+  // Handler for deleting an app
+  const handleDeleteApp = useCallback(async (appSlug: string) => {
+    if (!activeWorkspaceId) return
+    try {
+      await window.electronAPI.deleteApp(activeWorkspaceId, appSlug)
+    } catch (err) {
+      console.error('[Chat] Failed to delete app:', err)
+    }
+  }, [activeWorkspaceId])
+
   // Handler for What's New overlay
   const handleWhatsNewClick = useCallback(async () => {
     const content = await window.electronAPI.getReleaseNotes()
@@ -2401,6 +2458,15 @@ function AppShellContent({
                         onAddSkill: openAddSkill,
                       },
                     },
+                    // --- Custom Apps ---
+                    ...(apps.length > 0 ? [{
+                      id: "nav:apps",
+                      title: "Apps",
+                      label: String(apps.length),
+                      icon: LayoutGrid,
+                      variant: (isAppsNavigation(navState) ? "default" : "ghost") as "default" | "ghost",
+                      onClick: handleAppsClick,
+                    }] : []),
                     // --- Separator ---
                     { id: "separator:skills-settings", type: "separator" },
                     // --- Settings ---
@@ -3151,6 +3217,15 @@ function AppShellContent({
                 onTaskClick={handleQueueTaskSelect}
                 onDeleteTask={handleDeleteQueueTask}
                 selectedTaskId={isQueueNavigation(navState) && navState.details?.type === 'task' ? navState.details.taskId : null}
+              />
+            )}
+            {isAppsNavigation(navState) && activeWorkspaceId && (
+              /* Apps List */
+              <AppsListPanel
+                apps={apps}
+                onAppClick={handleAppSelect}
+                onDeleteApp={handleDeleteApp}
+                selectedAppSlug={isAppsNavigation(navState) && navState.details?.type === 'app' ? navState.details.appSlug : null}
               />
             )}
             {isSettingsNavigation(navState) && (

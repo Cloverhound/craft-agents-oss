@@ -34,7 +34,7 @@ export interface ParsedRoute {
 // Compound Route Types (new format)
 // =============================================================================
 
-export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'credentials' | 'queue' | 'settings'
+export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'credentials' | 'queue' | 'apps' | 'settings'
 
 export interface ParsedCompoundRoute {
   /** The navigator type */
@@ -58,7 +58,7 @@ export interface ParsedCompoundRoute {
  * Known prefixes that indicate a compound route
  */
 const COMPOUND_ROUTE_PREFIXES = [
-  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'sources', 'skills', 'credentials', 'queue', 'settings'
+  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'sources', 'skills', 'credentials', 'queue', 'apps', 'settings'
 ]
 
 /**
@@ -165,6 +165,30 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
       return {
         navigator: 'credentials',
         details: { type: 'credential', id: segments[2] },
+      }
+    }
+
+    return null
+  }
+
+  // Apps navigator
+  if (first === 'apps') {
+    if (segments.length === 1) {
+      return { navigator: 'apps', details: null }
+    }
+
+    // apps/app/{appSlug}
+    if (segments[1] === 'app' && segments[2]) {
+      // apps/app/{appSlug}/view/{viewId}
+      if (segments[3] === 'view' && segments[4]) {
+        return {
+          navigator: 'apps',
+          details: { type: 'app', id: `${segments[2]}:${segments[4]}` },
+        }
+      }
+      return {
+        navigator: 'apps',
+        details: { type: 'app', id: segments[2] },
       }
     }
 
@@ -299,6 +323,21 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
     return `credentials/credential/${parsed.details.id}`
   }
 
+  if (parsed.navigator === 'apps') {
+    if (!parsed.details) return 'apps'
+    if (parsed.details.type === 'app') {
+      // Check for viewId encoded as appSlug:viewId
+      const colonIdx = parsed.details.id.indexOf(':')
+      if (colonIdx > 0) {
+        const appSlug = parsed.details.id.substring(0, colonIdx)
+        const viewId = parsed.details.id.substring(colonIdx + 1)
+        return `apps/app/${appSlug}/view/${viewId}`
+      }
+      return `apps/app/${parsed.details.id}`
+    }
+    return 'apps'
+  }
+
   if (parsed.navigator === 'queue') {
     if (!parsed.details) return 'queue'
     if (parsed.details.type === 'task') return `queue/task/${parsed.details.id}`
@@ -428,6 +467,14 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
       return { type: 'view', name: 'credentials', params: {} }
     }
     return { type: 'view', name: 'credential-info', id: compound.details.id, params: {} }
+  }
+
+  // Apps
+  if (compound.navigator === 'apps') {
+    if (!compound.details) {
+      return { type: 'view', name: 'apps', params: {} }
+    }
+    return { type: 'view', name: 'app-host', id: compound.details.id, params: {} }
   }
 
   // Queue
@@ -572,6 +619,27 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
     }
   }
 
+  // Apps
+  if (compound.navigator === 'apps') {
+    if (!compound.details) {
+      return { navigator: 'apps', details: null }
+    }
+    // Parse compound ID (appSlug or appSlug:viewId)
+    const colonIdx = compound.details.id.indexOf(':')
+    if (colonIdx > 0) {
+      const appSlug = compound.details.id.substring(0, colonIdx)
+      const viewId = compound.details.id.substring(colonIdx + 1)
+      return {
+        navigator: 'apps',
+        details: { type: 'app', appSlug, viewId },
+      }
+    }
+    return {
+      navigator: 'apps',
+      details: { type: 'app', appSlug: compound.details.id },
+    }
+  }
+
   // Queue
   if (compound.navigator === 'queue') {
     if (!compound.details) {
@@ -676,6 +744,27 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
         }
       }
       return { navigator: 'credentials', details: null }
+    case 'apps':
+      return { navigator: 'apps', details: null }
+    case 'app-host':
+      if (parsed.id) {
+        const colonIdx = parsed.id.indexOf(':')
+        if (colonIdx > 0) {
+          return {
+            navigator: 'apps',
+            details: {
+              type: 'app',
+              appSlug: parsed.id.substring(0, colonIdx),
+              viewId: parsed.id.substring(colonIdx + 1),
+            },
+          }
+        }
+        return {
+          navigator: 'apps',
+          details: { type: 'app', appSlug: parsed.id },
+        }
+      }
+      return { navigator: 'apps', details: null }
     case 'queue':
       return { navigator: 'queue', details: null }
     case 'queue-task':
@@ -797,6 +886,16 @@ export function buildRouteFromNavigationState(state: NavigationState): string {
       return `credentials/credential/${state.details.credentialSlug}`
     }
     return 'credentials'
+  }
+
+  if (state.navigator === 'apps') {
+    if (state.details?.type === 'app') {
+      if (state.details.viewId) {
+        return `apps/app/${state.details.appSlug}/view/${state.details.viewId}`
+      }
+      return `apps/app/${state.details.appSlug}`
+    }
+    return 'apps'
   }
 
   if (state.navigator === 'queue') {

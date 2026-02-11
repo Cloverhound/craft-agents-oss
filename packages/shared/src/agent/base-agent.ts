@@ -141,6 +141,7 @@ export abstract class BaseAgent implements AgentBackend {
   onPermissionRequest: PermissionCallback | null = null;
   onPlanSubmitted: PlanCallback | null = null;
   onAuthRequest: AuthCallback | null = null;
+  onAppPreview: ((appSlug: string) => void) | null = null;
   onSourceChange: SourceChangeCallback | null = null;
   onSourcesListChange: ((sources: LoadedSource[]) => void) | null = null;
   onConfigValidationError: ((file: string, errors: string[]) => void) | null = null;

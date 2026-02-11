@@ -3340,6 +3340,88 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     windowManager.broadcastToAll(IPC_CHANNELS.LABELS_CHANGED, workspaceId)
   })
 
+  // ============================================================
+  // Apps Management (Workspace-scoped)
+  // ============================================================
+
+  // Get all apps for a workspace
+  ipcMain.handle(IPC_CHANNELS.APPS_GET, async (_event, workspaceId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { loadAllApps } = await import('@craft-agent/shared/apps')
+    return loadAllApps(workspace.rootPath)
+  })
+
+  // Compile an app (esbuild + Tailwind + index.html)
+  ipcMain.handle(IPC_CHANNELS.APPS_COMPILE, async (_event, workspaceId: string, appSlug: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { getAppPath, compileApp } = await import('@craft-agent/shared/apps')
+    const appPath = getAppPath(workspace.rootPath, appSlug)
+    const result = await compileApp(appPath)
+    windowManager.broadcastToAll(IPC_CHANNELS.APPS_CHANGED, workspaceId)
+    return result
+  })
+
+  // Run an app script (with proxy env vars for authenticated API access)
+  ipcMain.handle(
+    IPC_CHANNELS.APPS_RUN_SCRIPT,
+    async (_event, workspaceId: string, appSlug: string, scriptName: string, params?: Record<string, string>) => {
+      const workspace = getWorkspaceByNameOrId(workspaceId)
+      if (!workspace) throw new Error('Workspace not found')
+
+      const { join } = await import('path')
+      const { existsSync } = await import('fs')
+      const { getAppPath, loadAppConfig, runAppScript } = await import('@craft-agent/shared/apps')
+      const appPath = getAppPath(workspace.rootPath, appSlug)
+
+      // Try .ts first, then .js
+      let scriptPath = join(appPath, 'scripts', `${scriptName}.ts`)
+      if (!existsSync(scriptPath)) {
+        scriptPath = join(appPath, 'scripts', `${scriptName}.js`)
+      }
+
+      // Load app config to get its permission mode
+      const appConfig = loadAppConfig(workspace.rootPath, appSlug)
+      const appMode = appConfig?.mode ?? 'explore'
+
+      // Get proxy env vars for this app (registers app as a caller with the proxy)
+      const proxyEnv = await sessionManager.getAppProxyEnv(workspace, appSlug, appMode)
+
+      ipcLog.debug(`Running app script: ${appSlug}/${scriptName} (${scriptPath})`)
+      const result = await runAppScript({ scriptPath, params, cwd: appPath, env: proxyEnv ?? undefined })
+
+      if (!result.success) {
+        const errorMsg = result.stderr || `Script "${scriptName}" failed with exit code ${result.exitCode}`
+        ipcLog.error(`App script error [${appSlug}/${scriptName}]: ${errorMsg}`)
+        throw new Error(errorMsg)
+      }
+
+      return result
+    },
+  )
+
+  // Update an app's permission mode in the proxy
+  ipcMain.handle(
+    IPC_CHANNELS.APPS_SET_MODE,
+    async (_event, workspaceId: string, appSlug: string, mode: 'explore' | 'execute') => {
+      sessionManager.updateAppMode(workspaceId, appSlug, mode)
+    },
+  )
+
+  // Delete an app
+  ipcMain.handle(IPC_CHANNELS.APPS_DELETE, async (_event, workspaceId: string, appSlug: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { deleteApp } = await import('@craft-agent/shared/apps')
+    deleteApp(workspace.rootPath, appSlug)
+    windowManager.broadcastToAll(IPC_CHANNELS.APPS_CHANGED, workspaceId)
+    ipcLog.info(`Deleted app: ${appSlug}`)
+  })
+
   // Generic workspace image loading (for source icons, status icons, etc.)
   ipcMain.handle(IPC_CHANNELS.WORKSPACE_READ_IMAGE, async (_event, workspaceId: string, relativePath: string) => {
     const workspace = getWorkspaceByNameOrId(workspaceId)

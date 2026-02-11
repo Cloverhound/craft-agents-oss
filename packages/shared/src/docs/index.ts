@@ -100,6 +100,7 @@ export const APP_ROOT = '~/.craft-agent';
  */
 export const DOC_REFS = {
   appRoot: APP_ROOT,
+  apps: `${APP_ROOT}/docs/apps.md`,
   sources: `${APP_ROOT}/docs/sources.md`,
   credentials: `${APP_ROOT}/docs/credentials.md`,
   permissions: `${APP_ROOT}/docs/permissions.md`,

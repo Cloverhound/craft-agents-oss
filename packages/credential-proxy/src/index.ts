@@ -7,7 +7,7 @@
  */
 
 export { startProxy, type ProxyInstance, type ProxyOptions } from './proxy';
-export { SessionRegistry, type SessionInfo, type PermissionMode } from './session-registry';
+export { CallerRegistry, type CallerInfo, type CallerType, type PermissionMode } from './caller-registry';
 export { generateCA, forgeServerCert, cleanupCA, type CACert, type ForgedCert } from './ca';
 export { createCABundle, findSystemCABundle, cleanupCABundle } from './ca-bundle';
 export {

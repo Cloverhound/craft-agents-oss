@@ -2919,6 +2919,16 @@ export class SessionManager {
         // The UI will call sessionCommand({ type: 'startOAuth' }) when user clicks "Sign in"
       }
 
+      // Wire up onAppPreview to navigate host window to the app view
+      managed.agent.onAppPreview = (appSlug: string) => {
+        sessionLog.info(`App preview request for session ${managed.id}: ${appSlug}`)
+        if (this.windowManager) {
+          this.windowManager.broadcastToAll(IPC_CHANNELS.DEEP_LINK_NAVIGATE, {
+            view: `apps/app/${appSlug}`,
+          })
+        }
+      }
+
       // Wire up onSourceActivationRequest to auto-enable sources when agent tries to use them
       managed.agent.onSourceActivationRequest = async (sourceSlug: string): Promise<boolean> => {
         sessionLog.info(`Source activation request for session ${managed.id}:`, sourceSlug)
@@ -4644,7 +4654,7 @@ To view this task's output:
       // Update credential proxy session mode (takes effect immediately for next request)
       const proxy = this.credentialProxies.get(managed.workspace.id)
       if (proxy) {
-        proxy.updateSessionMode(sessionId, mode)
+        proxy.updateCallerMode(sessionId, mode)
       }
 
       this.sendEvent({
@@ -5559,7 +5569,7 @@ To view this task's output:
     if (!proxy) return
 
     // Register session with the proxy
-    proxy.registerSession(managed.id, managed.permissionMode ?? 'safe')
+    proxy.registerCaller(managed.id, 'session', managed.permissionMode ?? 'safe')
 
     // Set proxy config so SDK subprocess gets proxy env vars
     setProxyConfig({
@@ -5571,6 +5581,52 @@ To view this task's output:
   }
 
   /**
+   * Get proxy env vars for an app script.
+   * Ensures the proxy is running, registers the app as a caller,
+   * and returns env vars (HTTP_PROXY, HTTPS_PROXY, certs, etc.).
+   * Returns null if no credentials are configured for this workspace.
+   */
+  async getAppProxyEnv(workspace: Workspace, appSlug: string, appMode: 'explore' | 'execute' = 'explore'): Promise<Record<string, string> | null> {
+    const proxy = await this.ensureCredentialProxy(workspace)
+    if (!proxy) return null
+
+    const permissionMode = appMode === 'execute' ? 'allow-all' : 'safe'
+    const callerId = `app-${appSlug}`
+
+    // Register or update the app caller
+    proxy.registerCaller(callerId, 'app', permissionMode as import('@craft-agent/credential-proxy').PermissionMode)
+
+    const proxyUrl = `http://app-${appSlug}:app@127.0.0.1:${proxy.port}`
+    const env: Record<string, string> = {
+      HTTP_PROXY: proxyUrl,
+      HTTPS_PROXY: proxyUrl,
+      NODE_USE_ENV_PROXY: '1',
+      NO_PROXY: 'localhost,127.0.0.1,::1,.anthropic.com,.claude.ai',
+      NODE_EXTRA_CA_CERTS: proxy.caCertPath,
+    }
+
+    if (proxy.caBundlePath) {
+      env.SSL_CERT_FILE = proxy.caBundlePath
+      env.CURL_CA_BUNDLE = proxy.caBundlePath
+      env.REQUESTS_CA_BUNDLE = proxy.caBundlePath
+    }
+
+    return env
+  }
+
+  /**
+   * Update an app's permission mode in the proxy registry.
+   */
+  updateAppMode(workspaceId: string, appSlug: string, mode: 'explore' | 'execute'): void {
+    const proxy = this.credentialProxies.get(workspaceId)
+    if (!proxy) return
+
+    const permissionMode = mode === 'execute' ? 'allow-all' : 'safe'
+    proxy.updateCallerMode(`app-${appSlug}`, permissionMode as import('@craft-agent/credential-proxy').PermissionMode)
+    sessionLog.info(`Updated app ${appSlug} mode to ${mode} (${permissionMode})`)
+  }
+
+  /**
    * Unregister a session from the credential proxy.
    * If no more sessions remain for this workspace, stops the proxy.
    */
@@ -5578,11 +5634,11 @@ To view this task's output:
     const proxy = this.credentialProxies.get(workspaceId)
     if (!proxy) return
 
-    proxy.unregisterSession(sessionId)
+    proxy.unregisterCaller(sessionId)
 
-    // If no more sessions, stop the proxy
-    if (proxy.sessionCount === 0) {
-      sessionLog.info(`No more sessions for workspace ${workspaceId}, stopping credential proxy`)
+    // If no more callers, stop the proxy
+    if (proxy.callerCount === 0) {
+      sessionLog.info(`No more callers for workspace ${workspaceId}, stopping credential proxy`)
       proxy.stop()
       this.credentialProxies.delete(workspaceId)
       clearProxyConfig()
@@ -5621,7 +5677,7 @@ To view this task's output:
             // Register all existing sessions for this workspace
             for (const [sessId, managed] of this.sessions) {
               if (managed.workspace.id === workspaceId) {
-                newProxy.registerSession(sessId, managed.permissionMode ?? 'safe')
+                newProxy.registerCaller(sessId, 'session', managed.permissionMode ?? 'safe')
               }
             }
           }

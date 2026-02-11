@@ -77,6 +77,7 @@ import { readFileSync, existsSync } from 'node:fs';
 // System prompt for Craft Agent context
 import { getSystemPrompt } from '../prompts/system.ts';
 import { getCodexDeveloperInstructions } from './core/codex-developer-instructions.ts';
+import { getCredentialProxyEnv } from './options.ts';
 
 // PreToolUse utilities
 import {
@@ -240,6 +241,12 @@ export class CodexAgent extends BaseAgent {
   onAuthRequest: ((request: AuthRequest) => void) | null = null;
 
   /**
+   * Callback when app_preview tool is used.
+   * Should navigate the host window to display the app.
+   */
+  onAppPreview: ((appSlug: string) => void) | null = null;
+
+  /**
    * Resolve the connection slug for credential routing.
    * Uses connectionSlug from config (set by factory), falls back to session's llmConnection.
    */
@@ -328,6 +335,7 @@ export class CodexAgent extends BaseAgent {
       env.CODEX_HOME = this.config.codexHome;
       this.debug(`Using custom CODEX_HOME: ${this.config.codexHome}`);
     }
+    Object.assign(env, getCredentialProxyEnv());
 
     const options: AppServerOptions = {
       workDir: this.workingDirectory,

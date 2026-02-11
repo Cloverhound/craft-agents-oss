@@ -1,7 +1,11 @@
 // Capture errors in the isolated preload context and forward to Sentry
 import '@sentry/electron/preload'
+import { join } from 'path'
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS, type SessionEvent, type ElectronAPI, type FileAttachment, type LlmConnectionSetup } from '../shared/types'
+
+// Preload paths (computed here where __dirname is available, exposed to renderer)
+const appPreloadPath = join(__dirname, 'app-preload.js')
 
 const api: ElectronAPI = {
   // Session management
@@ -407,6 +411,28 @@ const api: ElectronAPI = {
     ipcRenderer.invoke(IPC_CHANNELS.VIEWS_LIST, workspaceId),
   saveViews: (workspaceId: string, views: any[]) =>
     ipcRenderer.invoke(IPC_CHANNELS.VIEWS_SAVE, workspaceId, views),
+
+  // Apps management (workspace-scoped, stored in apps/{slug}/)
+  appPreloadPath,
+  getApps: (workspaceId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPS_GET, workspaceId),
+  compileApp: (workspaceId: string, appSlug: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPS_COMPILE, workspaceId, appSlug),
+  runAppScript: (workspaceId: string, appSlug: string, scriptName: string, params?: Record<string, string>) =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPS_RUN_SCRIPT, workspaceId, appSlug, scriptName, params),
+  deleteApp: (workspaceId: string, appSlug: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPS_DELETE, workspaceId, appSlug),
+  setAppMode: (workspaceId: string, appSlug: string, mode: 'explore' | 'execute') =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPS_SET_MODE, workspaceId, appSlug, mode),
+  onAppsChanged: (callback: (workspaceId: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, workspaceId: string) => {
+      callback(workspaceId)
+    }
+    ipcRenderer.on(IPC_CHANNELS.APPS_CHANGED, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.APPS_CHANGED, handler)
+    }
+  },
 
   // Tool icon mappings (for Appearance settings page)
   getToolIconMappings: () => ipcRenderer.invoke(IPC_CHANNELS.TOOL_ICONS_GET_MAPPINGS),

@@ -802,6 +802,14 @@ export const IPC_CHANNELS = {
   QUEUE_GET_STATS: 'queue:getStats',
   QUEUE_CHANGED: 'queue:changed',  // Broadcast event (main → renderer)
 
+  // Apps management (workspace-scoped, stored in apps/{slug}/)
+  APPS_GET: 'apps:get',
+  APPS_COMPILE: 'apps:compile',
+  APPS_RUN_SCRIPT: 'apps:runScript',
+  APPS_DELETE: 'apps:delete',
+  APPS_SET_MODE: 'apps:setMode',
+  APPS_CHANGED: 'apps:changed',  // Broadcast event (main → renderer)
+
   // Views management (workspace-scoped, stored in views.json)
   VIEWS_LIST: 'views:list',
   VIEWS_SAVE: 'views:save',
@@ -1132,6 +1140,15 @@ export interface ElectronAPI {
   // Queue change listener (live updates when queue files change)
   onQueueChanged(callback: (workspaceId: string) => void): () => void
 
+  // Apps (workspace-scoped, stored in apps/{slug}/)
+  appPreloadPath: string
+  getApps(workspaceId: string): Promise<import('@craft-agent/shared/apps').LoadedApp[]>
+  compileApp(workspaceId: string, appSlug: string): Promise<import('@craft-agent/shared/apps').CompileResult>
+  runAppScript(workspaceId: string, appSlug: string, scriptName: string, params?: Record<string, string>): Promise<unknown>
+  deleteApp(workspaceId: string, appSlug: string): Promise<void>
+  setAppMode(workspaceId: string, appSlug: string, mode: 'explore' | 'execute'): Promise<void>
+  onAppsChanged(callback: (workspaceId: string) => void): () => void
+
   // Views (workspace-scoped, stored in views.json)
   listViews(workspaceId: string): Promise<import('@craft-agent/shared/views').ViewConfig[]>
   saveViews(workspaceId: string, views: import('@craft-agent/shared/views').ViewConfig[]): Promise<void>
@@ -1418,6 +1435,17 @@ export interface QueueNavigationState {
 }
 
 /**
+ * Apps navigation state - shows AppsListPanel in navigator
+ */
+export interface AppsNavigationState {
+  navigator: 'apps'
+  /** Selected app details, or null for empty state */
+  details: { type: 'app'; appSlug: string; viewId?: string; params?: Record<string, string> } | null
+  /** Optional right sidebar panel state */
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Unified navigation state - single source of truth for all 3 panels
  *
  * From this state we can derive:
@@ -1432,6 +1460,7 @@ export type NavigationState =
   | SkillsNavigationState
   | CredentialsNavigationState
   | QueueNavigationState
+  | AppsNavigationState
 
 /**
  * Type guard to check if state is sessions navigation
@@ -1476,6 +1505,13 @@ export const isQueueNavigation = (
 ): state is QueueNavigationState => state.navigator === 'queue'
 
 /**
+ * Type guard to check if state is apps navigation
+ */
+export const isAppsNavigation = (
+  state: NavigationState
+): state is AppsNavigationState => state.navigator === 'apps'
+
+/**
  * Default navigation state - allSessions with no selection
  */
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
@@ -1514,6 +1550,12 @@ export const getNavigationStateKey = (state: NavigationState): string => {
       return `queue/type/${state.details.typeSlug}`
     }
     return 'queue'
+  }
+  if (state.navigator === 'apps') {
+    if (state.details?.type === 'app') {
+      return `apps/app/${state.details.appSlug}`
+    }
+    return 'apps'
   }
   if (state.navigator === 'settings') {
     return `settings:${state.subpage}`
@@ -1581,6 +1623,16 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
       return { navigator: 'queue', details: { type: 'type', typeSlug } }
     }
     return { navigator: 'queue', details: null }
+  }
+
+  // Handle apps
+  if (key === 'apps') return { navigator: 'apps', details: null }
+  if (key.startsWith('apps/app/')) {
+    const appSlug = key.slice(9)
+    if (appSlug) {
+      return { navigator: 'apps', details: { type: 'app', appSlug } }
+    }
+    return { navigator: 'apps', details: null }
   }
 
   // Handle settings

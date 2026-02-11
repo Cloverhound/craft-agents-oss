@@ -1,0 +1,15 @@
+{
+  "name": "@craft-agent/app-sdk",
+  "version": "0.4.1",
+  "license": "Apache-2.0",
+  "description": "SDK for building custom apps within Craft Agent",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  }
+}

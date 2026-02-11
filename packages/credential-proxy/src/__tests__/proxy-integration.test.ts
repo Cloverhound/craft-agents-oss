@@ -65,17 +65,17 @@ describe.skipIf(!googleAvailable)('Proxy Integration — real HTTPS tunnel', () 
     expect(stdout).toBe('200');
   }, 15000);
 
-  it('tunnels HTTPS to google.com via curl with user:pass proxy auth', async () => {
+  it('tunnels HTTPS to google.com via curl with caller proxy auth', async () => {
     // Use the same URL format that getDefaultOptions() produces
     proxy = await startProxy({ credentials: [] });
-    proxy.registerSession('integration-test', 'allow-all');
+    proxy.registerCaller('integration-test', 'session', 'allow-all');
     const caPath = proxy.caBundlePath || proxy.caCertPath;
 
     const proc = Bun.spawn(
       [
         'curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
         // user:pass format — the fix that makes Bun's fetch work
-        '--proxy', `http://session-integration-test:x@127.0.0.1:${proxy.port}`,
+        '--proxy', `http://session-integration-test:session@127.0.0.1:${proxy.port}`,
         '--cacert', caPath,
         '--connect-timeout', '10',
         'https://www.google.com/',
@@ -94,9 +94,9 @@ describe.skipIf(!googleAvailable)('Proxy Integration — real HTTPS tunnel', () 
     // This is the code path the CLI uses: fetch(..., { proxy: url })
     // This was the exact scenario that was broken before the user:pass fix
     proxy = await startProxy({ credentials: [] });
-    proxy.registerSession('bun-test', 'allow-all');
+    proxy.registerCaller('bun-test', 'session', 'allow-all');
 
-    const proxyUrl = `http://session-bun-test:x@127.0.0.1:${proxy.port}`;
+    const proxyUrl = `http://session-bun-test:session@127.0.0.1:${proxy.port}`;
 
     const response = await fetch('https://www.google.com/', {
       proxy: proxyUrl,
@@ -114,7 +114,7 @@ describe.skipIf(!googleAvailable)('Proxy Integration — real HTTPS tunnel', () 
     // This documents the Bun bug that caused the original breakage.
     // Bun's fetch rejects proxy URLs with username but no password.
     proxy = await startProxy({ credentials: [] });
-    proxy.registerSession('bun-fail', 'allow-all');
+    proxy.registerCaller('bun-fail', 'session', 'allow-all');
 
     // Old format: user-only, no password
     const proxyUrl = `http://session-bun-fail@127.0.0.1:${proxy.port}`;
@@ -191,14 +191,14 @@ describe.skipIf(!httpbinAvailable)('Proxy Integration — MITM credential inject
     });
 
     proxy = await startProxy({ credentials: [cred] });
-    proxy.registerSession('mitm-test', 'allow-all');
+    proxy.registerCaller('mitm-test', 'session', 'allow-all');
     const caPath = proxy.caBundlePath || proxy.caCertPath;
 
     // Use curl with the proxy's CA so TLS verification passes
     const proc = Bun.spawn(
       [
         'curl', '-s',
-        '--proxy', `http://session-mitm-test:x@127.0.0.1:${proxy.port}`,
+        '--proxy', `http://session-mitm-test:session@127.0.0.1:${proxy.port}`,
         '--cacert', caPath,
         '--connect-timeout', '10',
         'https://httpbin.org/get',
@@ -224,13 +224,13 @@ describe.skipIf(!httpbinAvailable)('Proxy Integration — MITM credential inject
     });
 
     proxy = await startProxy({ credentials: [cred] });
-    proxy.registerSession('mitm-test', 'allow-all');
+    proxy.registerCaller('mitm-test', 'session', 'allow-all');
     const caPath = proxy.caBundlePath || proxy.caCertPath;
 
     const proc = Bun.spawn(
       [
         'curl', '-s',
-        '--proxy', `http://session-mitm-test:x@127.0.0.1:${proxy.port}`,
+        '--proxy', `http://session-mitm-test:session@127.0.0.1:${proxy.port}`,
         '--cacert', caPath,
         '--connect-timeout', '10',
         'https://httpbin.org/get?foo=bar&baz=123',

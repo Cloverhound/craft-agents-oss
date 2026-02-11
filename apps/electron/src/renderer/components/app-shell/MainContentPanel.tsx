@@ -31,6 +31,7 @@ import {
   isSkillsNavigation,
   isCredentialsNavigation,
   isQueueNavigation,
+  isAppsNavigation,
 } from '@/contexts/NavigationContext'
 import { useSessionSelection, useIsMultiSelectActive, useSelectedIds, useSelectionCount } from '@/hooks/useSession'
 import { extractLabelId } from '@craft-agent/shared/labels'
@@ -40,6 +41,7 @@ import SkillInfoPage from '@/pages/SkillInfoPage'
 import CredentialInfoPage from '@/pages/CredentialInfoPage'
 import QueueTaskDetailPage from '@/pages/QueueTaskDetailPage'
 import QueueTypeDetailPage from '@/pages/QueueTypeDetailPage'
+import AppHostPage from '@/pages/AppHostPage'
 import { getSettingsPageComponent } from '@/pages/settings/settings-pages'
 
 export interface MainContentPanelProps {
@@ -241,6 +243,30 @@ export function MainContentPanel({
       <Panel variant="grow" className={className}>
         <div className="flex items-center justify-center h-full text-muted-foreground">
           <p className="text-sm">No queue tasks yet</p>
+        </div>
+      </Panel>
+    )
+  }
+
+  // Apps navigator - show app host or empty state
+  if (isAppsNavigation(navState)) {
+    if (navState.details?.type === 'app') {
+      return wrapWithStoplight(
+        <Panel variant="grow" className={className}>
+          <AppHostPage
+            appSlug={navState.details.appSlug}
+            viewId={navState.details.viewId}
+            params={navState.details.params}
+            workspaceId={activeWorkspaceId || ''}
+          />
+        </Panel>
+      )
+    }
+    // No app selected - empty state
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <div className="flex items-center justify-center h-full text-muted-foreground">
+          <p className="text-sm">No apps installed</p>
         </div>
       </Panel>
     )

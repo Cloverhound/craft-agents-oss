@@ -40,6 +40,8 @@ import { permissionsConfigCache, getAppPermissionsDir } from '@craft-agent/share
 import { getWorkspacePath, getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '@craft-agent/shared/workspaces';
 import type { LoadedSkill } from '@craft-agent/shared/skills';
 import { loadSkill, loadWorkspaceSkills, skillNeedsIconDownload, downloadSkillIcon } from '@craft-agent/shared/skills';
+import type { LoadedApp } from '@craft-agent/shared/apps';
+import { loadAllApps, loadAppConfig, getWorkspaceAppsPath } from '@craft-agent/shared/apps';
 import {
   loadStatusConfig,
   statusNeedsIconDownload,
@@ -116,6 +118,12 @@ export interface ConfigWatcherCallbacks {
   /** Called when a status icon file changes */
   onStatusIconChange?: (workspaceId: string, iconFilename: string) => void;
 
+  // App callbacks
+  /** Called when a specific app changes (null if deleted) */
+  onAppChange?: (slug: string, app: LoadedApp | null) => void;
+  /** Called when the apps list changes (add/remove folders) */
+  onAppsListChange?: (apps: LoadedApp[]) => void;
+
   // Label callbacks
   /** Called when labels config.json changes */
   onLabelConfigChange?: (workspaceId: string) => void;
@@ -177,12 +185,14 @@ export class ConfigWatcher {
   // Track known items for detecting adds/removes
   private knownSources: Set<string> = new Set();
   private knownSkills: Set<string> = new Set();
+  private knownApps: Set<string> = new Set();
   private knownThemes: Set<string> = new Set();
 
   // Computed paths
   private workspaceDir: string;
   private sourcesDir: string;
   private skillsDir: string;
+  private appsDir: string;
 
   constructor(workspaceIdOrPath: string, callbacks: ConfigWatcherCallbacks) {
     this.callbacks = callbacks;
@@ -199,6 +209,7 @@ export class ConfigWatcher {
     }
     this.sourcesDir = getWorkspaceSourcesPath(this.workspaceDir);
     this.skillsDir = getWorkspaceSkillsPath(this.workspaceDir);
+    this.appsDir = getWorkspaceAppsPath(this.workspaceDir);
   }
 
   /**
@@ -250,6 +261,9 @@ export class ConfigWatcher {
     this.scanSkills();
     span.mark('scanSkills');
 
+    this.scanApps();
+    span.mark('scanApps');
+
     this.scanAppThemes();
     span.mark('scanAppThemes');
 
@@ -281,6 +295,7 @@ export class ConfigWatcher {
 
     this.knownSources.clear();
     this.knownSkills.clear();
+    this.knownApps.clear();
     this.knownThemes.clear();
 
     debug('[ConfigWatcher] Stopped');
@@ -400,6 +415,29 @@ export class ConfigWatcher {
       } else if (file && /^icon\.(svg|png|jpg|jpeg)$/i.test(file)) {
         // Icon file changes also trigger a skill change (to update iconPath)
         this.debounce(`skill-icon:${slug}`, () => this.handleSkillChange(slug));
+      }
+      return;
+    }
+
+    // Apps changes: apps/{slug}/...
+    if (parts[0] === 'apps' && parts.length >= 2) {
+      const slug = parts[1]!;  // Safe: checked parts.length >= 2
+      const file = parts[2];
+
+      // Directory-level changes (new/removed app folders)
+      if (parts.length === 2) {
+        this.debounce('apps-dir', () => this.handleAppsDirChange());
+        return;
+      }
+
+      // config.json or src/ changes trigger an app change
+      if (file === 'config.json') {
+        this.debounce(`app:${slug}`, () => this.handleAppChange(slug));
+      } else if (file === 'src' || (parts.length > 3 && parts[2] === 'src')) {
+        // Source file changes — trigger recompile notification
+        this.debounce(`app-src:${slug}`, () => this.handleAppChange(slug));
+      } else if (file && /^icon\.(svg|png|jpg|jpeg)$/i.test(file)) {
+        this.debounce(`app-icon:${slug}`, () => this.handleAppChange(slug));
       }
       return;
     }
@@ -751,6 +789,120 @@ export class ConfigWatcher {
         .catch((error) => {
           debug('[ConfigWatcher] Icon download failed for skill:', slug, error);
         });
+    }
+  }
+
+  // ============================================================
+  // Apps Handlers
+  // ============================================================
+
+  /**
+   * Scan apps directory to populate known apps
+   */
+  private scanApps(): void {
+    if (!existsSync(this.appsDir)) {
+      return;
+    }
+
+    try {
+      const entries = readdirSync(this.appsDir);
+
+      for (const entry of entries) {
+        const entryPath = join(this.appsDir, entry);
+        if (statSync(entryPath).isDirectory()) {
+          this.knownApps.add(entry);
+        }
+      }
+
+      debug('[ConfigWatcher] Known apps:', Array.from(this.knownApps));
+    } catch (error) {
+      debug('[ConfigWatcher] Error scanning apps:', error);
+    }
+  }
+
+  /**
+   * Handle apps directory change (add/remove folders)
+   */
+  private handleAppsDirChange(): void {
+    debug('[ConfigWatcher] Apps directory changed');
+
+    if (!existsSync(this.appsDir)) {
+      const removed = Array.from(this.knownApps);
+      this.knownApps.clear();
+
+      for (const slug of removed) {
+        this.callbacks.onAppChange?.(slug, null);
+      }
+
+      this.callbacks.onAppsListChange?.([]);
+      return;
+    }
+
+    try {
+      const entries = readdirSync(this.appsDir);
+      const currentFolders = new Set<string>();
+
+      for (const entry of entries) {
+        const entryPath = join(this.appsDir, entry);
+        if (statSync(entryPath).isDirectory()) {
+          currentFolders.add(entry);
+        }
+      }
+
+      // Find added folders
+      for (const folder of currentFolders) {
+        if (!this.knownApps.has(folder)) {
+          debug('[ConfigWatcher] New app folder:', folder);
+          this.knownApps.add(folder);
+
+          const config = loadAppConfig(this.workspaceDir, folder);
+          if (config) {
+            const folderPath = join(this.appsDir, folder);
+            const isBuilt = existsSync(join(folderPath, 'dist', 'index.html'));
+            this.callbacks.onAppChange?.(folder, { config, folderPath, isBuilt });
+          }
+        }
+      }
+
+      // Find removed folders
+      for (const folder of this.knownApps) {
+        if (!currentFolders.has(folder)) {
+          debug('[ConfigWatcher] Removed app folder:', folder);
+          this.knownApps.delete(folder);
+          this.callbacks.onAppChange?.(folder, null);
+        }
+      }
+
+      // Notify list change
+      const allApps = loadAllApps(this.workspaceDir);
+      this.callbacks.onAppsListChange?.(allApps);
+    } catch (error) {
+      debug('[ConfigWatcher] Error handling apps dir change:', error);
+      this.callbacks.onError?.('apps/', error as Error);
+    }
+  }
+
+  /**
+   * Handle app config or source file change
+   */
+  private handleAppChange(slug: string): void {
+    debug('[ConfigWatcher] App changed:', slug);
+
+    const appPath = join(this.appsDir, slug);
+    if (!existsSync(appPath)) {
+      if (this.knownApps.has(slug)) {
+        this.knownApps.delete(slug);
+        this.callbacks.onAppChange?.(slug, null);
+        const allApps = loadAllApps(this.workspaceDir);
+        this.callbacks.onAppsListChange?.(allApps);
+      }
+      return;
+    }
+
+    const config = loadAppConfig(this.workspaceDir, slug);
+    if (config) {
+      const isBuilt = existsSync(join(appPath, 'dist', 'index.html'));
+      this.callbacks.onAppChange?.(slug, { config, folderPath: appPath, isBuilt });
     }
   }
 

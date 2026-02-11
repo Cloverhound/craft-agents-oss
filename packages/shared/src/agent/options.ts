@@ -197,6 +197,38 @@ export function clearProxyConfig() {
     proxyConfig = null;
 }
 
+/**
+ * Build credential proxy environment variables for subprocesses.
+ * Returns an empty object when no proxy configuration is active.
+ */
+export function getCredentialProxyEnv(): Record<string, string> {
+    const proxyEnv: Record<string, string> = {};
+    if (!proxyConfig) return proxyEnv;
+
+    // Proxy-Authorization uses Basic auth: "session-{id}:session"
+    // The password field identifies the caller type.
+    const proxyUrl = `http://session-${proxyConfig.sessionId}:session@127.0.0.1:${proxyConfig.port}`;
+    proxyEnv.HTTP_PROXY = proxyUrl;
+    proxyEnv.HTTPS_PROXY = proxyUrl;
+    // Node's fetch/undici does not honor HTTP(S)_PROXY by default.
+    // This opt-in makes session subprocesses consistently use env proxy settings.
+    proxyEnv.NODE_USE_ENV_PROXY = '1';
+    // Bypass proxy for localhost and Anthropic API domains — the proxy is only
+    // for credential injection on user-configured APIs, not for LLM traffic.
+    proxyEnv.NO_PROXY = 'localhost,127.0.0.1,::1,.anthropic.com,.claude.ai';
+    // NODE_EXTRA_CA_CERTS appends to Node's built-in CAs (ideal for Node/Bun)
+    proxyEnv.NODE_EXTRA_CA_CERTS = proxyConfig.caCertPath;
+    // These replace the default trust store, so we use the combined bundle
+    // (system CAs + proxy CA) to maintain trust for non-intercepted domains
+    if (proxyConfig.caBundlePath) {
+        proxyEnv.SSL_CERT_FILE = proxyConfig.caBundlePath;
+        proxyEnv.CURL_CA_BUNDLE = proxyConfig.caBundlePath;
+        proxyEnv.REQUESTS_CA_BUNDLE = proxyConfig.caBundlePath;
+    }
+
+    return proxyEnv;
+}
+
 export function getDefaultOptions(): Partial<Options> {
     // Repair corrupted ~/.claude.json before the SDK subprocess reads it
     ensureClaudeConfig();
@@ -212,26 +244,7 @@ export function getDefaultOptions(): Partial<Options> {
 
     // Credential proxy env vars — injects proxy settings so all HTTP clients
     // in the SDK subprocess route through the credential proxy for auto-auth.
-    const proxyEnv: Record<string, string> = {};
-    if (proxyConfig) {
-        // Bun's fetch proxy option rejects URLs with username-only (no password).
-        // Include a dummy password so the URL parses as valid user:pass@host.
-        const proxyUrl = `http://session-${proxyConfig.sessionId}:x@127.0.0.1:${proxyConfig.port}`;
-        proxyEnv.HTTP_PROXY = proxyUrl;
-        proxyEnv.HTTPS_PROXY = proxyUrl;
-        // Bypass proxy for localhost and Anthropic API domains — the proxy is only
-        // for credential injection on user-configured APIs, not for LLM traffic.
-        proxyEnv.NO_PROXY = 'localhost,127.0.0.1,::1,.anthropic.com,.claude.ai';
-        // NODE_EXTRA_CA_CERTS appends to Node's built-in CAs (ideal for Node/Bun)
-        proxyEnv.NODE_EXTRA_CA_CERTS = proxyConfig.caCertPath;
-        // These replace the default trust store, so we use the combined bundle
-        // (system CAs + proxy CA) to maintain trust for non-intercepted domains
-        if (proxyConfig.caBundlePath) {
-            proxyEnv.SSL_CERT_FILE = proxyConfig.caBundlePath;
-            proxyEnv.CURL_CA_BUNDLE = proxyConfig.caBundlePath;
-            proxyEnv.REQUESTS_CA_BUNDLE = proxyConfig.caBundlePath;
-        }
-    }
+    const proxyEnv = getCredentialProxyEnv();
 
     // If custom path is set (e.g., for Electron), use it with minimal options
     if (customPathToClaudeCodeExecutable) {

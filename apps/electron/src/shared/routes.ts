@@ -162,6 +162,13 @@ export const routes = {
       return `credentials/credential/${credentialSlug}` as const
     },
 
+    /** Apps view (apps navigator). Pass an appSlug for app detail view, optionally with viewId. */
+    apps: (appSlug?: string, viewId?: string) => {
+      if (appSlug && viewId) return `apps/app/${appSlug}/view/${viewId}` as const
+      if (appSlug) return `apps/app/${appSlug}` as const
+      return 'apps' as const
+    },
+
     /** Queue view (queue navigator). Supports type filtering and task/type detail views. */
     queue: (params?: { typeSlug?: string; taskId?: string; typeDetailSlug?: string }) => {
       const { typeSlug, taskId, typeDetailSlug } = params ?? {}

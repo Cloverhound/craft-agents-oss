@@ -1,7 +1,7 @@
 /**
  * Proxy Integration Tests
  *
- * Tests the proxy lifecycle: start, session management, CONNECT handling,
+ * Tests the proxy lifecycle: start, caller management, CONNECT handling,
  * and MITM TLS handshake. Uses a local mock HTTPS server and curl
  * for end-to-end verification.
  */
@@ -43,7 +43,7 @@ describe('Proxy', () => {
       proxy = await startProxy({ credentials: [] });
       expect(proxy.port).toBeGreaterThan(0);
       expect(proxy.caCertPath).toBeTruthy();
-      expect(proxy.sessionCount).toBe(0);
+      expect(proxy.callerCount).toBe(0);
 
       proxy.stop();
       proxy = null; // Prevent double-stop in afterEach
@@ -74,36 +74,46 @@ describe('Proxy', () => {
     });
   });
 
-  describe('session management', () => {
-    it('registers and tracks sessions', async () => {
+  describe('caller management', () => {
+    it('registers and tracks session callers', async () => {
       proxy = await startProxy({ credentials: [] });
 
-      proxy.registerSession('s1', 'allow-all');
-      expect(proxy.sessionCount).toBe(1);
+      proxy.registerCaller('s1', 'session', 'allow-all');
+      expect(proxy.callerCount).toBe(1);
 
-      proxy.registerSession('s2', 'safe');
-      expect(proxy.sessionCount).toBe(2);
+      proxy.registerCaller('s2', 'session', 'safe');
+      expect(proxy.callerCount).toBe(2);
     });
 
-    it('unregisters sessions', async () => {
+    it('registers and tracks app callers', async () => {
       proxy = await startProxy({ credentials: [] });
 
-      proxy.registerSession('s1', 'allow-all');
-      proxy.registerSession('s2', 'safe');
-      proxy.unregisterSession('s1');
-      expect(proxy.sessionCount).toBe(1);
+      proxy.registerCaller('my-app', 'app', 'safe');
+      expect(proxy.callerCount).toBe(1);
 
-      proxy.unregisterSession('s2');
-      expect(proxy.sessionCount).toBe(0);
+      proxy.registerCaller('s1', 'session', 'allow-all');
+      expect(proxy.callerCount).toBe(2);
     });
 
-    it('updates session permission mode', async () => {
+    it('unregisters callers', async () => {
       proxy = await startProxy({ credentials: [] });
 
-      proxy.registerSession('s1', 'safe');
-      proxy.updateSessionMode('s1', 'allow-all');
+      proxy.registerCaller('s1', 'session', 'allow-all');
+      proxy.registerCaller('my-app', 'app', 'safe');
+      proxy.unregisterCaller('s1');
+      expect(proxy.callerCount).toBe(1);
+
+      proxy.unregisterCaller('my-app');
+      expect(proxy.callerCount).toBe(0);
+    });
+
+    it('updates caller permission mode', async () => {
+      proxy = await startProxy({ credentials: [] });
+
+      proxy.registerCaller('s1', 'session', 'safe');
+      proxy.updateCallerMode('s1', 'allow-all');
       // Can't directly verify mode, but shouldn't throw
-      expect(proxy.sessionCount).toBe(1);
+      expect(proxy.callerCount).toBe(1);
     });
   });
 
@@ -124,12 +134,12 @@ describe('Proxy', () => {
         urlPatterns: ['https://api.test.local/*'],
       });
       proxy = await startProxy({ credentials: [cred] });
-      proxy.registerSession('s1', 'allow-all');
+      proxy.registerCaller('s1', 'session', 'allow-all');
 
       const result = await new Promise<string>((resolve, reject) => {
         const timeoutId = setTimeout(() => reject(new Error('timeout')), 5000);
         const sock = netConnect(proxy!.port, '127.0.0.1', () => {
-          const auth = Buffer.from('session-s1:').toString('base64');
+          const auth = Buffer.from('session-s1:session').toString('base64');
           sock.write(
             `CONNECT api.test.local:443 HTTP/1.1\r\n` +
             `Host: api.test.local:443\r\n` +
@@ -156,21 +166,19 @@ describe('Proxy', () => {
       expect(result).toContain('Connection Established');
     });
 
-    it('extracts session ID from user:pass format (Bun compat)', async () => {
-      // Bun requires user:pass in proxy URLs. The proxy should extract the
-      // session ID from "session-{id}:x" where "x" is a dummy password.
+    it('extracts app caller from proxy auth', async () => {
       const cred = makeCred({
         slug: 'test',
         urlPatterns: ['https://api.test.local/*'],
       });
       proxy = await startProxy({ credentials: [cred] });
-      proxy.registerSession('s1', 'allow-all');
+      proxy.registerCaller('my-app', 'app', 'allow-all');
 
       const result = await new Promise<string>((resolve, reject) => {
         const timeoutId = setTimeout(() => reject(new Error('timeout')), 5000);
         const sock = netConnect(proxy!.port, '127.0.0.1', () => {
-          // Use "session-s1:x" — the format getDefaultOptions() now produces
-          const auth = Buffer.from('session-s1:x').toString('base64');
+          // Use "app-my-app:app" format
+          const auth = Buffer.from('app-my-app:app').toString('base64');
           sock.write(
             `CONNECT api.test.local:443 HTTP/1.1\r\n` +
             `Host: api.test.local:443\r\n` +
@@ -194,7 +202,7 @@ describe('Proxy', () => {
       });
 
       // 200 means the proxy matched credentials → MITM path was taken,
-      // which means the session ID was successfully extracted
+      // which means the app caller was successfully extracted
       expect(result).toContain('200');
       expect(result).toContain('Connection Established');
     });
@@ -244,24 +252,20 @@ describe('Proxy', () => {
 
   describe('TLS MITM handshake', () => {
     it('completes TLS handshake with forged cert for matching hostname', async () => {
-      // Use a hostname that resolves to localhost so the proxy can connect
       const cred = makeCred({
         slug: 'test',
         urlPatterns: ['https://localhost/*'],
       });
       proxy = await startProxy({ credentials: [cred] });
-      proxy.registerSession('s1', 'allow-all');
+      proxy.registerCaller('s1', 'session', 'allow-all');
 
-      // Use curl to test the full CONNECT → TLS handshake.
-      // The upstream connection will fail (nothing listening on 443) but the
-      // TLS handshake between curl and the proxy's forged cert should succeed.
       const caPath = proxy.caBundlePath || proxy.caCertPath;
 
       const proc = Bun.spawn(
         [
           'curl', '-v', '-s',
-          '--noproxy', '',  // Override NO_PROXY from env (e.g., when running inside a proxy session)
-          '--proxy', `http://session-s1@127.0.0.1:${proxy.port}`,
+          '--noproxy', '',
+          '--proxy', `http://session-s1:session@127.0.0.1:${proxy.port}`,
           '--cacert', caPath,
           '--connect-timeout', '3',
           'https://localhost/test',
@@ -272,8 +276,6 @@ describe('Proxy', () => {
       const stderr = await new Response(proc.stderr).text();
       await proc.exited;
 
-      // Verify the TLS handshake with the proxy succeeded
-      // (The upstream connect will fail, giving us a 502, but TLS was OK)
       expect(stderr).toContain('SSL certificate verify ok');
       expect(stderr).toContain('localhost');
     }, 10000);
@@ -284,14 +286,14 @@ describe('Proxy', () => {
         urlPatterns: ['https://localhost/*'],
       });
       proxy = await startProxy({ credentials: [cred] });
-      proxy.registerSession('s1', 'allow-all');
+      proxy.registerCaller('s1', 'session', 'allow-all');
 
       const caPath = proxy.caBundlePath || proxy.caCertPath;
       const proc = Bun.spawn(
         [
           'curl', '-v', '-s',
-          '--noproxy', '',  // Override NO_PROXY from env
-          '--proxy', `http://session-s1@127.0.0.1:${proxy.port}`,
+          '--noproxy', '',
+          '--proxy', `http://session-s1:session@127.0.0.1:${proxy.port}`,
           '--cacert', caPath,
           '--connect-timeout', '3',
           'https://localhost/test',
@@ -302,7 +304,6 @@ describe('Proxy', () => {
       const stderr = await new Response(proc.stderr).text();
       await proc.exited;
 
-      // Check cert subject and SAN
       expect(stderr).toContain('subject: CN=localhost');
       expect(stderr).toContain('subjectAltName: host "localhost" matched cert\'s "localhost"');
     }, 10000);
@@ -310,7 +311,6 @@ describe('Proxy', () => {
 
   describe('tunnel (non-MITM)', () => {
     it('tunnels CONNECT to non-matching hostname', async () => {
-      // Use a credential for a different domain so google.com goes through tunnel
       const cred = makeCred({
         slug: 'test',
         urlPatterns: ['https://api.unrelated-domain.com/*'],
@@ -357,14 +357,14 @@ describe('Proxy', () => {
       expect(logs.some(l => l.includes('CA generated'))).toBe(true);
       expect(logs.some(l => l.includes('Listening'))).toBe(true);
 
-      proxy.registerSession('s1', 'safe');
+      proxy.registerCaller('s1', 'session', 'safe');
       expect(logs.some(l => l.includes('Registered session s1'))).toBe(true);
 
-      proxy.updateSessionMode('s1', 'allow-all');
-      expect(logs.some(l => l.includes('Updated session s1'))).toBe(true);
+      proxy.updateCallerMode('s1', 'allow-all');
+      expect(logs.some(l => l.includes('Updated caller s1'))).toBe(true);
 
-      proxy.unregisterSession('s1');
-      expect(logs.some(l => l.includes('Unregistered session s1'))).toBe(true);
+      proxy.unregisterCaller('s1');
+      expect(logs.some(l => l.includes('Unregistered caller s1'))).toBe(true);
     });
 
     it('logs credential reload', async () => {
@@ -398,41 +398,16 @@ describe('Proxy MITM with local upstream', () => {
   });
 
   it('MITMs a local HTTPS server and echoes request back', async () => {
-    // This test uses a local HTTPS server on localhost with a forged cert.
-    // The proxy will MITM the connection and forward to the upstream.
-
-    // Create a credential matching localhost
     const cred = makeCred({
       slug: 'local-test',
       urlPatterns: ['https://localhost/*'],
       auth: { type: 'bearer' },
     });
 
-    // Start the proxy (it generates its own CA)
     proxy = await startProxy({ credentials: [cred] });
-    proxy.registerSession('test-session', 'allow-all');
-
-    // Start a mock upstream HTTPS server using the PROXY's CA so it can connect
-    // Actually, the proxy connects to the real upstream using system TLS.
-    // For localhost, we need to make the upstream's cert trusted by the proxy.
-    // The proxy uses the system trust store when connecting upstream.
-    //
-    // Approach: Start upstream on localhost with a self-signed cert,
-    // and use --insecure or NODE_TLS_REJECT_UNAUTHORIZED=0 won't work.
-    //
-    // Better approach: Start the upstream on a loopback port with a cert
-    // from a separate CA, and have the proxy trust it via NODE_EXTRA_CA_CERTS.
-    // But that's complex for a unit test.
-    //
-    // Simplest: Use curl's --connect-to to route the proxy's upstream
-    // connection... but the proxy resolves independently.
-    //
-    // The most pragmatic approach for automated tests: test the proxy's
-    // MITM handshake (verified above with curl -v) and test credential
-    // injection logic separately (verified in interceptor.test.ts).
-    // The full E2E with real APIs is covered by the manual test-proxy.ts.
+    proxy.registerCaller('test-session', 'session', 'allow-all');
 
     expect(proxy.port).toBeGreaterThan(0);
-    expect(proxy.sessionCount).toBe(1);
+    expect(proxy.callerCount).toBe(1);
   });
 });

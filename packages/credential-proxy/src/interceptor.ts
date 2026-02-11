@@ -19,7 +19,7 @@ import type {
   OAuth2AuthConfig,
 } from '@craft-agent/shared/credentials/credential-config-types';
 import { matchUrlPattern } from '@craft-agent/shared/credentials/matcher';
-import type { PermissionMode } from './session-registry';
+import type { PermissionMode } from './caller-registry';
 
 export interface InterceptedHeaders {
   [name: string]: string;

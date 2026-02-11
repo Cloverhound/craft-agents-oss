@@ -462,6 +462,9 @@ export class ClaudeAgent extends BaseAgent {
   // 5. Agent resumes and processes the result
   public onAuthRequest: ((request: AuthRequest) => void) | null = null;
 
+  // Callback when app_preview tool is used — navigates host UI to show the app
+  public onAppPreview: ((appSlug: string) => void) | null = null;
+
   // Callback when a source config changes (hot-reload from file watcher)
   public onSourceChange: ((slug: string, source: LoadedSource | null) => void) | null = null;
 
@@ -533,6 +536,10 @@ export class ClaudeAgent extends BaseAgent {
       onAuthRequest: (request) => {
         this.onDebug?.(`[ClaudeAgent] onAuthRequest received: ${request.sourceSlug} (type: ${request.type})`);
         this.onAuthRequest?.(request);
+      },
+      onAppPreview: (appSlug) => {
+        this.onDebug?.(`[ClaudeAgent] onAppPreview received: ${appSlug}`);
+        this.onAppPreview?.(appSlug);
       },
     });
 

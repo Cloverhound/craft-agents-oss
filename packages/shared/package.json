@@ -47,6 +47,8 @@
     "./labels": "./src/labels/index.ts",
     "./labels/auto": "./src/labels/auto/index.ts",
     "./labels/storage": "./src/labels/storage.ts",
+    "./apps": "./src/apps/index.ts",
+    "./apps/types": "./src/apps/types.ts",
     "./queue": "./src/queue/index.ts",
     "./queue/storage": "./src/queue/storage.ts",
     "./queue/types": "./src/queue/types.ts",

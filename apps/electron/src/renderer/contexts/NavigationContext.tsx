@@ -60,6 +60,7 @@ import {
   isSkillsNavigation,
   isCredentialsNavigation,
   isQueueNavigation,
+  isAppsNavigation,
   DEFAULT_NAVIGATION_STATE,
   parseDefaultChatFilter,
 } from '../../shared/types'
@@ -68,6 +69,7 @@ import { sessionMetaMapAtom, updateSessionMetaAtom, type SessionMeta } from '@/a
 import { sourcesAtom } from '@/atoms/sources'
 import { skillsAtom } from '@/atoms/skills'
 import { credentialsAtom } from '@/atoms/credentials'
+import { appsAtom } from '@/atoms/apps'
 
 // Re-export routes for convenience
 export { routes }
@@ -75,7 +77,7 @@ export type { Route }
 
 // Re-export navigation state types for consumers
 export type { NavigationState, SessionFilter }
-export { isSessionsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation, isCredentialsNavigation, isQueueNavigation }
+export { isSessionsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation, isCredentialsNavigation, isQueueNavigation, isAppsNavigation }
 
 interface NavigationContextValue {
   /** Navigate to a route */
@@ -271,6 +273,15 @@ export function NavigationProvider({
       return skills[0]?.slug ?? null
     },
     [skills]
+  )
+
+  // Helper: Get first app slug
+  const appsForNav = useAtomValue(appsAtom)
+  const getFirstAppSlug = useCallback(
+    (): string | null => {
+      return appsForNav[0]?.config.slug ?? null
+    },
+    [appsForNav]
   )
 
   // Helper: Get first credential slug
@@ -535,6 +546,22 @@ export function NavigationProvider({
         }
       }
 
+      // For apps: auto-select first app if no details provided
+      if (isAppsNavigation(newState) && !newState.details) {
+        const firstAppSlug = getFirstAppSlug()
+        if (firstAppSlug) {
+          const stateWithSelection: NavigationState = {
+            ...newState,
+            details: { type: 'app', appSlug: firstAppSlug },
+          }
+          setNavigationState(stateWithSelection)
+          return stateWithSelection
+        } else {
+          setNavigationState(newState)
+          return newState
+        }
+      }
+
       // For chats with explicit session: update session selection
       if (isSessionsNavigation(nextState) && nextState.details) {
         if (workspaceId) {
@@ -547,7 +574,7 @@ export function NavigationProvider({
       setNavigationState(nextState)
       return nextState
     },
-    [getFirstSessionId, getLastSelectedSessionId, getFirstSourceSlug, getFirstSkillSlug, getFirstCredentialSlug, setSession, store, workspaceId]
+    [getFirstSessionId, getLastSelectedSessionId, getFirstSourceSlug, getFirstSkillSlug, getFirstCredentialSlug, getFirstAppSlug, setSession, store, workspaceId]
   )
 
   // Main navigate function - unified approach using NavigationState

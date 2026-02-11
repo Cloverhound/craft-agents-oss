@@ -7,8 +7,8 @@
  * Non-matching domains are tunneled through as standard CONNECT proxies
  * with zero overhead.
  *
- * Session identification via Proxy-Authorization header enables per-session
- * permission mode enforcement.
+ * Caller identification via Proxy-Authorization header enables per-caller
+ * permission mode enforcement. Callers can be sessions or apps.
  */
 
 import { createServer, type Server, type IncomingMessage } from 'node:http';
@@ -16,7 +16,7 @@ import { connect as tlsConnect, createServer as createTlsServer, type TLSSocket 
 import { connect as netConnect, type Socket } from 'node:net';
 import { generateCA, forgeServerCert, cleanupCA, type CACert, type ForgedCert } from './ca';
 import { createCABundle } from './ca-bundle';
-import { SessionRegistry, type PermissionMode } from './session-registry';
+import { CallerRegistry, type CallerType, type PermissionMode } from './caller-registry';
 import {
   hostnameMatchesCredentials,
   matchCredentialForUrl,
@@ -41,16 +41,16 @@ export interface ProxyInstance {
   caBundlePath: string | null;
   /** Stop the proxy and clean up */
   stop(): void;
-  /** Register a session with its permission mode */
-  registerSession(sessionId: string, permissionMode: PermissionMode): void;
-  /** Unregister a session */
-  unregisterSession(sessionId: string): void;
-  /** Update a session's permission mode */
-  updateSessionMode(sessionId: string, permissionMode: PermissionMode): void;
+  /** Register a caller (session or app) with its permission mode */
+  registerCaller(callerId: string, callerType: CallerType, permissionMode: PermissionMode): void;
+  /** Unregister a caller */
+  unregisterCaller(callerId: string): void;
+  /** Update a caller's permission mode */
+  updateCallerMode(callerId: string, permissionMode: PermissionMode): void;
   /** Reload credential configs (e.g., after credential add/remove) */
   reloadCredentials(credentials: LoadedCredentialConfig[]): void;
-  /** Number of active sessions */
-  sessionCount: number;
+  /** Number of active callers */
+  callerCount: number;
 }
 
 /**
@@ -76,8 +76,8 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
     log('[credential-proxy] No system CA bundle found — SSL_CERT_FILE/CURL_CA_BUNDLE will not be set');
   }
 
-  // Session registry
-  const registry = new SessionRegistry();
+  // Caller registry (sessions + apps)
+  const registry = new CallerRegistry();
 
   // Cert cache: hostname → ForgedCert
   const certCache = new Map<string, ForgedCert>();
@@ -92,10 +92,15 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
   }
 
   /**
-   * Extract session ID from Proxy-Authorization header.
-   * Format: Basic base64("session-{id}:")
+   * Extract caller identity from Proxy-Authorization header.
+   *
+   * Format: Basic base64("{type}-{id}:{type}")
+   *   - "session-{sessionId}:session"
+   *   - "app-{appSlug}:app"
+   *
+   * The username prefix and password both encode the caller type.
    */
-  function extractSessionId(proxyAuth: string | undefined): string | null {
+  function extractCaller(proxyAuth: string | undefined): { id: string; type: CallerType } | null {
     if (!proxyAuth) return null;
 
     const parts = proxyAuth.split(' ');
@@ -103,11 +108,29 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
 
     try {
       const decoded = Buffer.from(parts[1], 'base64').toString('utf-8');
-      // Format: "session-{id}:x" (password is a dummy value for Bun compat)
-      const [username] = decoded.split(':');
-      if (username && username.startsWith('session-')) {
-        return username.slice('session-'.length);
+      const colonIdx = decoded.indexOf(':');
+      if (colonIdx === -1) return null;
+
+      const username = decoded.slice(0, colonIdx);
+      const password = decoded.slice(colonIdx + 1);
+
+      // Determine caller type from the password field
+      let callerType: CallerType;
+      if (password === 'app') {
+        callerType = 'app';
+      } else {
+        // "session" or anything else defaults to session
+        callerType = 'session';
       }
+
+      // Extract the ID by stripping the type prefix from the username
+      const prefix = `${callerType}-`;
+      if (username.startsWith(prefix)) {
+        return { id: username.slice(prefix.length), type: callerType };
+      }
+
+      // Fallback: if no prefix match, use the full username as ID
+      return { id: username, type: callerType };
     } catch {
       // Invalid base64
     }
@@ -172,7 +195,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
     clientSocket: Socket,
     hostname: string,
     port: number,
-    sessionId: string | null,
+    callerId: string | null,
     head: Buffer,
   ): void {
     // Forge server cert for this hostname
@@ -184,7 +207,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
       (tlsSocket: TLSSocket) => {
         // TLS handshake succeeded — we now have decrypted traffic
         log(`[credential-proxy] MITM TLS handshake complete for ${hostname}:${port}`);
-        handleDecryptedConnection(tlsSocket, hostname, port, sessionId);
+        handleDecryptedConnection(tlsSocket, hostname, port, callerId);
 
         // Close the one-shot server (no more connections needed)
         mitmServer.close();
@@ -245,7 +268,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
     tlsSocket: TLSSocket,
     hostname: string,
     port: number,
-    sessionId: string | null,
+    callerId: string | null,
   ): void {
     tlsSocket.on('error', (err: Error) => {
       log(`[credential-proxy] Decrypted connection error for ${hostname}: ${err.message}`);
@@ -303,10 +326,10 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
       // Build full URL for credential matching
       const fullUrl = `https://${hostname}${port !== 443 ? `:${port}` : ''}${path}`;
 
-      // Get session permission mode
-      const permissionMode = sessionId ? registry.getMode(sessionId) : 'safe';
+      // Get caller permission mode
+      const permissionMode = callerId ? registry.getMode(callerId) : 'safe';
 
-      log(`[credential-proxy] MITM request: ${method} ${fullUrl} (session=${sessionId}, mode=${permissionMode}, creds=${credentials.length})`);
+      log(`[credential-proxy] MITM request: ${method} ${fullUrl} (caller=${callerId}, mode=${permissionMode}, creds=${credentials.length})`);
 
       // Intercept and inject credentials
       interceptRequest(fullUrl, method, credentials, permissionMode)
@@ -423,16 +446,17 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
 
     const { hostname, port } = target;
 
-    // Extract session ID from Proxy-Authorization header
-    const sessionId = extractSessionId(req.headers['proxy-authorization'] as string | undefined);
+    // Extract caller identity from Proxy-Authorization header
+    const caller = extractCaller(req.headers['proxy-authorization'] as string | undefined);
+    const callerId = caller?.id ?? null;
 
     // Check if this hostname matches any credential patterns
     const shouldMitm = hostnameMatchesCredentials(hostname, port, credentials);
-    log(`[credential-proxy] CONNECT ${hostname}:${port} (session=${sessionId}, mitm=${shouldMitm}, head=${head.length}b)`);
+    log(`[credential-proxy] CONNECT ${hostname}:${port} (caller=${callerId}, type=${caller?.type ?? 'unknown'}, mitm=${shouldMitm}, head=${head.length}b)`);
 
     if (shouldMitm) {
       // MITM: intercept this connection
-      handleMitm(clientSocket, hostname, port, sessionId, head);
+      handleMitm(clientSocket, hostname, port, callerId, head);
     } else {
       // Tunnel: pass through without interception
       handleTunnel(clientSocket, hostname, port, head);
@@ -475,19 +499,19 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
       cleanupCA(ca);
     },
 
-    registerSession(sessionId: string, permissionMode: PermissionMode) {
-      registry.register(sessionId, permissionMode);
-      log(`[credential-proxy] Registered session ${sessionId} (mode: ${permissionMode})`);
+    registerCaller(callerId: string, callerType: CallerType, permissionMode: PermissionMode) {
+      registry.register(callerId, callerType, permissionMode);
+      log(`[credential-proxy] Registered ${callerType} ${callerId} (mode: ${permissionMode})`);
     },
 
-    unregisterSession(sessionId: string) {
-      registry.unregister(sessionId);
-      log(`[credential-proxy] Unregistered session ${sessionId}`);
+    unregisterCaller(callerId: string) {
+      registry.unregister(callerId);
+      log(`[credential-proxy] Unregistered caller ${callerId}`);
     },
 
-    updateSessionMode(sessionId: string, permissionMode: PermissionMode) {
-      registry.updateMode(sessionId, permissionMode);
-      log(`[credential-proxy] Updated session ${sessionId} mode to ${permissionMode}`);
+    updateCallerMode(callerId: string, permissionMode: PermissionMode) {
+      registry.updateMode(callerId, permissionMode);
+      log(`[credential-proxy] Updated caller ${callerId} mode to ${permissionMode}`);
     },
 
     reloadCredentials(newCredentials: LoadedCredentialConfig[]) {
@@ -495,7 +519,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyInstance> 
       log(`[credential-proxy] Reloaded credentials (${newCredentials.length} total)`);
     },
 
-    get sessionCount() {
+    get callerCount() {
       return registry.size;
     },
   };

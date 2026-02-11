@@ -33,6 +33,9 @@
  * - queue_type_create: Create a new task type
  * - queue_type_list: List available task types
  * - queue_type_get: Get task type definition
+ * - app_create: Scaffold a new custom app
+ * - app_compile: Compile an app (esbuild + Tailwind)
+ * - app_preview: Navigate host UI to display the app
  * - transform_data: Transform data files via script for datatable/spreadsheet blocks
  *
  * Source and Skill CRUD is done via standard file editing tools (Read/Write/Edit).
@@ -106,6 +109,13 @@ import {
   createQueueTypeGetTool,
 } from '../queue/queue-tools.ts';
 
+// App tools (custom apps authoring)
+import {
+  createAppCreateTool,
+  createAppCompileTool,
+  createAppPreviewTool,
+} from '../apps/app-tools.ts';
+
 // ============================================================
 // Session-Scoped Tool Callbacks
 // ============================================================
@@ -125,6 +135,12 @@ export interface SessionScopedToolCallbacks {
    * The auth UI should be shown and execution paused.
    */
   onAuthRequest?: (request: AuthRequest) => void;
+
+  /**
+   * Called when app_preview tool is used.
+   * Should navigate the host window to display the app.
+   */
+  onAppPreview?: (appSlug: string) => void;
 }
 
 // Registry of callbacks keyed by sessionId
@@ -691,11 +707,15 @@ export function getSessionScopedTools(
     createQueueTypeListTool(sessionId, workspaceRootPath),
     createQueueTypeGetTool(sessionId, workspaceRootPath),
 
+    // App tools (custom apps authoring)
+    createAppCreateTool(sessionId, workspaceRootPath),
+    createAppCompileTool(sessionId, workspaceRootPath),
+    createAppPreviewTool(sessionId, workspaceRootPath, getSessionScopedToolCallbacks, sessionId),
+
     // transform_data
     tool('transform_data', TOOL_DESCRIPTIONS.transform_data, transformDataSchema, async (args) => {
       return handleTransformData(sessionId, workspaceRootPath, args);
     }),
-
   ];
 
   // Create MCP server
