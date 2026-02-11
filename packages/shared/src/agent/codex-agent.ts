@@ -76,6 +76,7 @@ import { readFileSync, existsSync } from 'node:fs';
 
 // System prompt for Craft Agent context
 import { getSystemPrompt } from '../prompts/system.ts';
+import { getCodexDeveloperInstructions } from './core/codex-developer-instructions.ts';
 
 // PreToolUse utilities
 import {
@@ -1670,6 +1671,8 @@ export class CodexAgent extends BaseAgent {
     try {
       // Ensure client is connected
       const client = await this.ensureClient();
+      const workspaceRoot = this.config.workspace.rootPath ?? this.workingDirectory;
+      const developerInstructions = getCodexDeveloperInstructions(workspaceRoot);
 
       // Start or resume thread
       const permissionMode = this.permissionManager.getPermissionMode();
@@ -1705,7 +1708,7 @@ export class CodexAgent extends BaseAgent {
                   undefined, // preset (default)
                   'Codex' // backend name
                 ),
-            developerInstructions: null,
+            developerInstructions,
             personality: null,
           });
           this.debug(`Resumed thread: ${this.codexThreadId}`);
@@ -1742,7 +1745,7 @@ export class CodexAgent extends BaseAgent {
                   undefined, // preset (default)
                   'Codex' // backend name
                 ),
-            developerInstructions: null,
+            developerInstructions,
           });
           this.codexThreadId = response.thread.id;
           this.debug(`Started new thread: ${this.codexThreadId}`);
@@ -1766,7 +1769,7 @@ export class CodexAgent extends BaseAgent {
                 undefined, // preset (default)
                 'Codex' // backend name
               ),
-          developerInstructions: null,
+          developerInstructions,
         });
         this.codexThreadId = response.thread.id;
         this.debug(`Started new thread: ${this.codexThreadId}`);
@@ -1981,7 +1984,10 @@ export class CodexAgent extends BaseAgent {
     // ============================================================
     // SKILL MENTION EXTRACTION (delegated to BaseAgent)
     // ============================================================
-    const { skillContents, cleanMessage: effectiveMessage } = this.extractSkillContent(message);
+    const { skillContents } = this.extractSkillContent(message);
+    // Preserve original user message text so [skill:...] tags remain visible to Codex.
+    // We still inject resolved SKILL.md content via skillContents above.
+    const effectiveMessage = message;
 
     // ============================================================
     // CONTEXT INJECTION (matching ClaudeAgent)
@@ -2265,7 +2271,7 @@ export class CodexAgent extends BaseAgent {
                 undefined, // preset (default)
                 'Codex' // backend name
               ),
-          developerInstructions: null,
+          developerInstructions: getCodexDeveloperInstructions(this.config.workspace.rootPath ?? this.workingDirectory),
           personality: null,
         });
         this.debug(`Thread ${threadId} resumed successfully`);
