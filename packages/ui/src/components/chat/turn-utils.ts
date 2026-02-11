@@ -161,7 +161,8 @@ export type TurnPhase =
  *
  * Priority order (first match wins):
  * 1. complete - turn.isComplete is true
- * 2. streaming - response exists and is streaming (final response)
+ * 2a. streaming - response exists and is streaming (final response)
+ * 2b. complete - response exists and is NOT streaming (defensive: isComplete may lag)
  * 3. tool_active - any TOOL activity has status 'running'
  * 4. awaiting - has activities but no tools running (the gap!)
  * 5. pending - no activities yet
@@ -180,6 +181,13 @@ export function deriveTurnPhase(turn: AssistantTurn): TurnPhase {
   // Note: turn.response only exists for final responses, not intermediate text
   if (turn.response && turn.response.isStreaming) {
     return 'streaming'
+  }
+
+  // Defensive: if a non-streaming response exists, the turn is effectively complete.
+  // Prevents "Thinking..." from showing when the response card is already rendered
+  // (can happen during transient state when isComplete lags behind response arrival).
+  if (turn.response && !turn.response.isStreaming) {
+    return 'complete'
   }
 
   // Check if any TOOL activities are currently running.

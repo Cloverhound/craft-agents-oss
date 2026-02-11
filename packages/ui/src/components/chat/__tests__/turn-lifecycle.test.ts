@@ -343,10 +343,10 @@ describe('edge cases', () => {
     expect(deriveTurnPhase(turn)).toBe('complete')
   })
 
-  it('response with isStreaming false but isComplete false returns awaiting', () => {
-    // This is an edge case - usually when response.isStreaming is false,
-    // the turn should be marked complete. But we trust isComplete as
-    // the authoritative signal.
+  it('response with isStreaming false but isComplete false returns complete (defensive)', () => {
+    // A non-streaming response is the authoritative signal that the turn is done.
+    // This prevents "Thinking..." from showing when the response card is already
+    // visible (transient state where isComplete lags behind response arrival).
     const turn: AssistantTurn = {
       type: 'assistant',
       turnId: 'test',
@@ -366,10 +366,7 @@ describe('edge cases', () => {
       isComplete: false, // Not yet marked complete
       timestamp: Date.now(),
     }
-    // Per our priority: complete > streaming > tool_active > awaiting > pending
-    // response.isStreaming is false, so not streaming
-    // no running tools, so not tool_active
-    // has activities, so awaiting
-    expect(deriveTurnPhase(turn)).toBe('awaiting')
+    // Defensive: non-streaming response → complete, regardless of isComplete flag
+    expect(deriveTurnPhase(turn)).toBe('complete')
   })
 })

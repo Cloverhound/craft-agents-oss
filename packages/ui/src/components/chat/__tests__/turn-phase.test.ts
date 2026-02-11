@@ -164,16 +164,16 @@ describe('deriveTurnPhase', () => {
       expect(deriveTurnPhase(turn)).toBe('awaiting')
     })
 
-    it('returns awaiting when response exists but is not streaming (non-streaming response means complete, but isComplete takes precedence)', () => {
-      // This is an edge case - if response.isStreaming is false, we should
-      // really be complete. But the deriveTurnPhase function uses isComplete
-      // as the authoritative signal for completion.
+    it('returns complete when response exists and is not streaming, even if isComplete is false', () => {
+      // Defensive: a non-streaming response means the turn is effectively done.
+      // Prevents "Thinking..." from showing when the response card is already rendered
+      // (can happen during transient state when isComplete lags behind response arrival).
       const turn = createTurn({
         activities: [createActivity('completed')],
         isComplete: false,
         response: createResponse(false),
       })
-      expect(deriveTurnPhase(turn)).toBe('awaiting')
+      expect(deriveTurnPhase(turn)).toBe('complete')
     })
   })
 
@@ -236,6 +236,28 @@ describe('deriveTurnPhase', () => {
       const turn = createTurn({
         activities: [createActivity('completed')],
         isComplete: true,
+      })
+      expect(deriveTurnPhase(turn)).toBe('complete')
+    })
+  })
+
+  describe('non-streaming response completes turn (defensive)', () => {
+    it('returns complete when response is done but isComplete was not set', () => {
+      // Regression: transient state during streaming where response arrives
+      // but isComplete hasn't been set yet — should NOT show "Thinking..."
+      const turn = createTurn({
+        activities: [createActivity('completed')],
+        isComplete: false,
+        response: createResponse(false),
+      })
+      expect(deriveTurnPhase(turn)).toBe('complete')
+    })
+
+    it('returns complete for response-only turn without isComplete', () => {
+      const turn = createTurn({
+        activities: [],
+        isComplete: false,
+        response: createResponse(false),
       })
       expect(deriveTurnPhase(turn)).toBe('complete')
     })
