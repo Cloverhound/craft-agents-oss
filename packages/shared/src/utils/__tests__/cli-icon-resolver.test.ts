@@ -187,6 +187,10 @@ describe('extractCommandName', () => {
   test('shell wrapper with sudo inside', () => {
     expect(extractCommandName("bash -c 'sudo docker ps'")).toBe('docker');
   });
+
+  test('gracefully handles bad substitution syntax', () => {
+    expect(extractCommandName('echo ${k.toUpperCase()}')).toBeUndefined();
+  });
 });
 
 // ============================================
@@ -262,6 +266,12 @@ describe('extractCommandNames', () => {
     expect(
       extractCommandNames('cat package.json | jq .scripts | head')
     ).toEqual(['cat', 'jq', 'head']);
+  });
+
+  test('skips malformed sub-command and keeps parsing others', () => {
+    expect(
+      extractCommandNames('echo ${k.toUpperCase()} && git status')
+    ).toEqual(['git']);
   });
 });
 

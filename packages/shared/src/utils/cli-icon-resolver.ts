@@ -19,9 +19,9 @@
 
 import { existsSync } from 'fs';
 import { join, basename } from 'path';
-import { parse as shellParse } from 'shell-quote';
 import { encodeIconToDataUrl } from './icon-encoder.ts';
 import { readJsonFileSync } from './files.ts';
+import { parseShellTokensSafe } from './safe-shell-parse.ts';
 
 // ============================================
 // Types
@@ -170,10 +170,11 @@ export function splitCommands(commandStr: string): string[] {
  */
 export function extractCommandName(subCommand: string): string | undefined {
   // Use shell-quote for proper tokenization (handles quotes, escapes, etc.)
-  const parsed = shellParse(subCommand);
-
-  // Filter to string tokens only (shell-quote can return operator objects)
-  const tokens = parsed.filter((t): t is string => typeof t === 'string');
+  // Guard against parser errors from malformed shell substitutions.
+  const tokens = parseShellTokensSafe(subCommand);
+  if (!tokens) {
+    return undefined;
+  }
 
   let idx = 0;
 
