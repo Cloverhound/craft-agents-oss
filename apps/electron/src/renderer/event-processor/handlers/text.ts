@@ -109,6 +109,11 @@ export function handleTextComplete(
       isIntermediate: event.isIntermediate,
       turnId: event.turnId,
       parentToolUseId: event.parentToolUseId,
+      // When finalizing as non-intermediate (final response), refresh the
+      // timestamp to ensure it sorts after preceding tool messages in
+      // groupMessagesByTurn. The original timestamp from text_delta may
+      // predate tool_start events from the same API round.
+      ...(!event.isIntermediate && { timestamp: Date.now() }),
     }, shouldUpdateTimestamp)
     return { session: updatedSession, streaming: null }
   }

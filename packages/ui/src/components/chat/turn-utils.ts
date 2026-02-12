@@ -651,10 +651,14 @@ export function groupMessagesByTurn(messages: Message[]): Turn[] {
       currentTurn.isStreaming = !!message.isStreaming
       currentTurn.isComplete = !message.isStreaming
 
-      // Flush when turn is complete (non-streaming = final response received)
-      if (!message.isStreaming) {
-        flushCurrentTurn()
-      }
+      // DO NOT flush here — let the turn accumulate all messages until
+      // the next user message, plan, or end of messages. Flushing immediately
+      // on a non-streaming response can split the turn when the response
+      // message has an earlier timestamp than tool messages (the "upside down
+      // turn" bug). Tools from the same agent turn may sort after the response
+      // due to timestamp differences between text_delta and tool_start events.
+      // The turn will be flushed by: (1) the next user message, (2) a plan
+      // message, or (3) the final flushCurrentTurn() at the end of the loop.
       continue
     }
   }

@@ -316,6 +316,134 @@ describe('turn lifecycle scenarios', () => {
   })
 })
 
+// ============================================================================
+// Regression: "Upside Down Turn" Bug
+// ============================================================================
+
+describe('upside down turn regression', () => {
+  it('response with earlier timestamp than tools stays in same turn', () => {
+    // Regression: If the response message has an earlier timestamp than tool
+    // messages (possible when text_delta fires before tool_start in the same
+    // API round), the response must NOT split into a separate turn.
+    resetCounters()
+    const baseTime = Date.now()
+
+    const messages: Message[] = [
+      // User message
+      { id: 'user-1', role: 'user', content: 'Hello', timestamp: baseTime },
+      // Response with EARLIER timestamp (from text_delta before tools)
+      {
+        id: 'response-1', role: 'assistant', content: 'Here is the result',
+        timestamp: baseTime + 100,
+        isStreaming: false, isIntermediate: false,
+      },
+      // Tool with LATER timestamp (tool_start arrived after text_delta)
+      {
+        id: 'tool-1', role: 'tool', content: 'File contents',
+        timestamp: baseTime + 200,
+        toolName: 'Read', toolUseId: 'tu-1',
+        toolStatus: 'completed', toolResult: 'File contents',
+      },
+      // Another tool with even later timestamp
+      {
+        id: 'tool-2', role: 'tool', content: 'Search results',
+        timestamp: baseTime + 300,
+        toolName: 'Grep', toolUseId: 'tu-2',
+        toolStatus: 'completed', toolResult: 'Search results',
+      },
+    ]
+
+    const turns = groupMessagesByTurn(messages)
+    const assistantTurns = turns.filter(t => t.type === 'assistant') as AssistantTurn[]
+
+    // Must be ONE assistant turn, not two
+    expect(assistantTurns.length).toBe(1)
+    // The turn must have both tools as activities AND the response
+    expect(assistantTurns[0].activities.length).toBe(2)
+    expect(assistantTurns[0].response).toBeDefined()
+    expect(assistantTurns[0].response!.text).toBe('Here is the result')
+    expect(assistantTurns[0].isComplete).toBe(true)
+  })
+
+  it('response between user messages does not split into separate turn from tools', () => {
+    // Simulates the exact "upside down" scenario: response sorts before tools
+    // due to timestamp, but all should be in one turn
+    resetCounters()
+    const baseTime = Date.now()
+
+    const messages: Message[] = [
+      { id: 'user-1', role: 'user', content: 'Do something', timestamp: baseTime },
+      // Intermediate text (from first API call, before tools)
+      {
+        id: 'intermediate-1', role: 'assistant', content: 'Let me check...',
+        timestamp: baseTime + 50,
+        isIntermediate: true, isPending: false, isStreaming: false,
+      },
+      // Tool from same API call
+      {
+        id: 'tool-1', role: 'tool', content: '',
+        timestamp: baseTime + 100,
+        toolName: 'Read', toolUseId: 'tu-1',
+        toolStatus: 'completed', toolResult: 'Done',
+      },
+      // Final response (later API call) — timestamp is after tools
+      {
+        id: 'response-1', role: 'assistant', content: 'All done.',
+        timestamp: baseTime + 500,
+        isStreaming: false, isIntermediate: false,
+      },
+    ]
+
+    const turns = groupMessagesByTurn(messages)
+    const assistantTurns = turns.filter(t => t.type === 'assistant') as AssistantTurn[]
+
+    expect(assistantTurns.length).toBe(1)
+    // Activities: intermediate text + tool
+    expect(assistantTurns[0].activities.length).toBe(2)
+    expect(assistantTurns[0].response).toBeDefined()
+    expect(assistantTurns[0].response!.text).toBe('All done.')
+  })
+
+  it('completed response does not flush turn (tools after response stay in same turn)', () => {
+    // This tests the core fix: removing flush on final response
+    resetCounters()
+    const baseTime = Date.now()
+
+    const messages: Message[] = [
+      { id: 'user-1', role: 'user', content: 'Hello', timestamp: baseTime },
+      // Tool first
+      {
+        id: 'tool-1', role: 'tool', content: 'Done',
+        timestamp: baseTime + 100,
+        toolName: 'Write', toolUseId: 'tu-1',
+        toolStatus: 'completed', toolResult: 'Done',
+      },
+      // Response arrives (non-streaming, non-intermediate)
+      {
+        id: 'response-1', role: 'assistant', content: 'Created the file.',
+        timestamp: baseTime + 200,
+        isStreaming: false, isIntermediate: false,
+      },
+      // Another tool arrives AFTER response (timestamp ordering anomaly)
+      {
+        id: 'tool-2', role: 'tool', content: 'Verified',
+        timestamp: baseTime + 300,
+        toolName: 'Read', toolUseId: 'tu-2',
+        toolStatus: 'completed', toolResult: 'Verified',
+      },
+    ]
+
+    const turns = groupMessagesByTurn(messages)
+    const assistantTurns = turns.filter(t => t.type === 'assistant') as AssistantTurn[]
+
+    // All should be in ONE turn
+    expect(assistantTurns.length).toBe(1)
+    expect(assistantTurns[0].activities.length).toBe(2)
+    expect(assistantTurns[0].response).toBeDefined()
+    expect(assistantTurns[0].response!.text).toBe('Created the file.')
+  })
+})
+
 describe('edge cases', () => {
   it('empty activities array returns pending', () => {
     resetCounters()
