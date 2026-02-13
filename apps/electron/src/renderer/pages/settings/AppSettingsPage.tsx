@@ -125,14 +125,11 @@ export default function AppSettingsPage() {
                       <span className="text-muted-foreground">
                         {updateChecker.updateInfo?.currentVersion ?? 'Loading...'}
                       </span>
-                      {updateChecker.updateAvailable && updateChecker.updateInfo?.latestVersion && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={updateChecker.installUpdate}
-                        >
-                          Update to {updateChecker.updateInfo.latestVersion}
-                        </Button>
+                      {updateChecker.isDownloading && updateChecker.updateInfo?.latestVersion && (
+                        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                          <Spinner className="w-3 h-3" />
+                          <span>Downloading v{updateChecker.updateInfo.latestVersion} ({updateChecker.downloadProgress}%)</span>
+                        </div>
                       )}
                     </div>
                   </SettingsRow>
@@ -153,13 +150,13 @@ export default function AppSettingsPage() {
                       )}
                     </Button>
                   </SettingsRow>
-                  {updateChecker.isReadyToInstall && (
-                    <SettingsRow label="Install update">
+                  {updateChecker.isReadyToInstall && updateChecker.updateInfo?.latestVersion && (
+                    <SettingsRow label="Update ready">
                       <Button
                         size="sm"
                         onClick={updateChecker.installUpdate}
                       >
-                        Restart to Update
+                        Restart to Update to v{updateChecker.updateInfo.latestVersion}
                       </Button>
                     </SettingsRow>
                   )}
