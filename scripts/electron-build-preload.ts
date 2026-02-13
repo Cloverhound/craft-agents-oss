@@ -9,6 +9,7 @@ import { join } from "path";
 const ROOT_DIR = join(import.meta.dir, "..");
 const DIST_DIR = join(ROOT_DIR, "apps/electron/dist");
 const OUTPUT_FILE = join(DIST_DIR, "preload.cjs");
+const APP_PRELOAD_OUTPUT_FILE = join(DIST_DIR, "app-preload.js");
 
 // Wait for file to stabilize (no size changes)
 async function waitForFileStable(filePath: string, timeoutMs = 10000): Promise<boolean> {
@@ -96,11 +97,33 @@ async function main(): Promise<void> {
     process.exit(exitCode);
   }
 
+  const appPreloadProc = spawn({
+    cmd: [
+      "bun", "run", "esbuild",
+      "apps/electron/src/preload/app-preload.ts",
+      "--bundle",
+      "--platform=node",
+      "--format=cjs",
+      "--outfile=apps/electron/dist/app-preload.js",
+      "--external:electron",
+    ],
+    cwd: ROOT_DIR,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+
+  const appPreloadExitCode = await appPreloadProc.exited;
+  if (appPreloadExitCode !== 0) {
+    console.error("❌ app-preload esbuild failed with exit code", appPreloadExitCode);
+    process.exit(appPreloadExitCode);
+  }
+
   // Wait for file to stabilize
   console.log("⏳ Waiting for file to stabilize...");
   const stable = await waitForFileStable(OUTPUT_FILE);
+  const appPreloadStable = await waitForFileStable(APP_PRELOAD_OUTPUT_FILE);
 
-  if (!stable) {
+  if (!stable || !appPreloadStable) {
     console.error("❌ Output file did not stabilize");
     process.exit(1);
   }
@@ -108,9 +131,13 @@ async function main(): Promise<void> {
   // Verify the output
   console.log("🔍 Verifying build output...");
   const verification = await verifyJsFile(OUTPUT_FILE);
+  const appPreloadVerification = await verifyJsFile(APP_PRELOAD_OUTPUT_FILE);
 
-  if (!verification.valid) {
+  if (!verification.valid || !appPreloadVerification.valid) {
     console.error("❌ Build verification failed:", verification.error);
+    if (!appPreloadVerification.valid) {
+      console.error("❌ App preload verification failed:", appPreloadVerification.error);
+    }
     process.exit(1);
   }
 

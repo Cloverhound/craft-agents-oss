@@ -8,6 +8,48 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 
+function sendOpenUrlToHost(url: string): void {
+  ipcRenderer.sendToHost('app-message', {
+    type: 'APP_OPEN_URL',
+    requestId: globalThis.crypto.randomUUID(),
+    url,
+  })
+}
+
+function shouldInterceptUrl(url: URL): boolean {
+  // Keep in-app file navigation untouched, forward external/deep links to host shell.
+  if (url.protocol === 'file:') return false
+  return [ 'http:', 'https:', 'mailto:', 'craftagents:' ].includes(url.protocol)
+}
+
+function installAnchorInterceptor(): void {
+  const handlePointerOpen = (event: MouseEvent): void => {
+    if (event.defaultPrevented) return
+    if (event.button !== 0 && event.button !== 1) return
+
+    const target = event.target as HTMLElement | null
+    const anchor = target?.closest('a[href]') as HTMLAnchorElement | null
+    if (!anchor) return
+    if (!anchor.href) return
+
+    let parsed: URL
+    try {
+      parsed = new URL(anchor.href, window.location.href)
+    } catch {
+      return
+    }
+
+    if (!shouldInterceptUrl(parsed)) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    sendOpenUrlToHost(parsed.toString())
+  }
+
+  window.addEventListener('click', handlePointerOpen, true)
+  window.addEventListener('auxclick', handlePointerOpen, true)
+}
+
 /**
  * Exposed API for custom apps running inside webviews.
  * Apps typically use the SDK hooks rather than calling this directly,
@@ -38,3 +80,5 @@ const appAPI = {
 }
 
 contextBridge.exposeInMainWorld('craftAgent', appAPI)
+
+installAnchorInterceptor()

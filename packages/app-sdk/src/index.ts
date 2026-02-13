@@ -35,6 +35,7 @@ export { useAppMode } from './hooks/useAppMode.ts';
 export type { AppMode, UseAppModeResult } from './hooks/useAppMode.ts';
 export { useCreateSession } from './hooks/useCreateSession.ts';
 export type { CreateSessionOptions, CreateSessionResult, UseCreateSessionResult } from './hooks/useCreateSession.ts';
+export { useOpenUrl } from './hooks/useOpenUrl.ts';
 
 // Components
 export { Table, Badge, Button, Card, EmptyState, Spinner } from './components/index.ts';

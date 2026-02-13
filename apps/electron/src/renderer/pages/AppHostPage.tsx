@@ -130,6 +130,17 @@ export default function AppHostPage({
           break
         }
 
+        case 'APP_OPEN_URL': {
+          const url = message.url as string
+          await window.electronAPI.openUrl(url)
+          response = {
+            type: 'response',
+            requestId: message.requestId,
+            result: { ok: true },
+          }
+          break
+        }
+
         case 'APP_SET_MODE': {
           const requestedMode = message.mode as 'explore' | 'execute'
           const configMode = app?.config.mode ?? 'explore'
