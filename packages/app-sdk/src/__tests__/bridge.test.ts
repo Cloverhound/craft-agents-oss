@@ -15,6 +15,19 @@ describe('Bridge', () => {
     expect(messages[0]!.scriptName).toBe('list');
   });
 
+  it('sendToHost supports APP_OPEN_URL payloads', () => {
+    const { transport, getSentMessages } = createMockTransport();
+    const bridge = createBridge(transport);
+
+    bridge.sendToHost('APP_OPEN_URL', { url: 'https://craft.do' });
+
+    const messages = getSentMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.type).toBe('APP_OPEN_URL');
+    expect(messages[0]!.requestId).toBeDefined();
+    expect(messages[0]!.url).toBe('https://craft.do');
+  });
+
   it('resolves promise when response matches requestId', async () => {
     const { transport, simulateResponse, getSentMessages } = createMockTransport();
     const bridge = createBridge(transport);
@@ -46,6 +59,22 @@ describe('Bridge', () => {
     });
 
     await expect(promise).rejects.toThrow('Script failed');
+  });
+
+  it('resolves APP_OPEN_URL requests when host responds', async () => {
+    const { transport, simulateResponse, getSentMessages } = createMockTransport();
+    const bridge = createBridge(transport);
+
+    const promise = bridge.sendToHost('APP_OPEN_URL', { url: 'https://craft.do/docs' });
+    const sent = getSentMessages()[0]!;
+
+    simulateResponse({
+      type: 'response',
+      requestId: sent.requestId,
+      result: { ok: true },
+    });
+
+    await expect(promise).resolves.toEqual({ ok: true });
   });
 
   it('ignores responses with unmatched requestId', async () => {
