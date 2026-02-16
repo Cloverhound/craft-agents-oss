@@ -11,7 +11,8 @@
  * 4. Config validation: Validate workspace config files before writes
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { expandPath } from '../../utils/paths.ts';
 import {
   detectConfigFileType,
@@ -20,6 +21,8 @@ import {
   formatValidationResult,
   type ConfigFileDetection,
 } from '../../config/validators.ts';
+import { AGENTS_PLUGIN_NAME } from '../../skills/types.ts';
+import { GLOBAL_AGENT_SKILLS_DIR, PROJECT_AGENT_SKILLS_DIR } from '../../skills/storage.ts';
 
 // ============================================================
 // TYPES
@@ -162,36 +165,93 @@ export function expandToolPaths(
 // ============================================================
 
 /**
- * Ensure skill names are fully-qualified with workspace ID prefix.
+ * Ensure skill names are fully-qualified with the correct plugin prefix.
  *
- * The SDK requires fully-qualified names (workspaceId:slug) to resolve skills.
- * If the agent calls a skill with just the short slug, we prefix it here.
+ * The SDK resolves skills as `pluginName:skillSlug` where the plugin name is
+ * derived from path.basename() of the registered plugin directory. Skills can
+ * live in 3 tiers:
+ *   1. Workspace: {workspaceRoot}/skills/{slug}/ → plugin name = basename(workspaceRoot)
+ *   2. Project:   {workingDir}/.agents/skills/{slug}/ → plugin name = ".agents"
+ *   3. Global:    ~/.agents/skills/{slug}/ → plugin name = ".agents"
+ *
+ * This function resolves the bare slug to the correct plugin prefix by checking
+ * which directory actually contains the skill. It also handles re-qualifying
+ * skills that were incorrectly qualified by the UI (which always uses the
+ * workspace slug, even for global/project skills).
  *
  * @param input - The Skill tool input ({ skill: string, args?: string })
- * @param workspaceId - The workspace ID to use as prefix
+ * @param workspaceSlug - The workspace slug (basename of workspace root)
+ * @param workspaceRootPath - Absolute path to the workspace root
+ * @param workingDirectory - Absolute path to the current working directory (optional)
  * @param onDebug - Optional debug callback
  * @returns SkillQualificationResult with modified flag and updated input
  */
 export function qualifySkillName(
   input: Record<string, unknown>,
-  workspaceId: string,
+  workspaceSlug: string,
+  workspaceRootPath?: string,
+  workingDirectory?: string,
   onDebug?: (message: string) => void
 ): SkillQualificationResult {
   const skill = input.skill as string | undefined;
+  if (!skill) return { modified: false, input };
 
-  if (!skill || skill.includes(':')) {
-    // Already qualified or no skill name
+  // Extract the bare slug — strip any existing qualifier (e.g. "CraftAgentWS:commit" → "commit")
+  const bareSlug = skill.includes(':') ? skill.split(':').pop()! : skill;
+  if (!bareSlug) return { modified: false, input };
+
+  // If we don't have the workspace root path, fall back to simple workspace-only qualification
+  if (!workspaceRootPath) {
+    if (skill.includes(':')) return { modified: false, input };
+    const qualifiedSkill = `${workspaceSlug}:${skill}`;
+    onDebug?.(`Skill tool: qualified "${skill}" → "${qualifiedSkill}" (legacy fallback)`);
+    return { modified: true, input: { ...input, skill: qualifiedSkill } };
+  }
+
+  // Resolve which plugin tier contains this skill by checking SKILL.md existence
+  const resolvedSkill = resolveSkillPlugin(bareSlug, workspaceSlug, workspaceRootPath, workingDirectory);
+
+  if (resolvedSkill === skill) {
+    // Already correctly qualified
     return { modified: false, input };
   }
 
-  // Short name detected - prepend workspaceId
-  const qualifiedSkill = `${workspaceId}:${skill}`;
-  onDebug?.(`Skill tool: qualified "${skill}" → "${qualifiedSkill}"`);
-
+  onDebug?.(`Skill tool: qualified "${skill}" → "${resolvedSkill}"`);
   return {
     modified: true,
-    input: { ...input, skill: qualifiedSkill },
+    input: { ...input, skill: resolvedSkill },
   };
+}
+
+/**
+ * Resolve a skill slug to its fully-qualified plugin:slug name by checking
+ * which plugin directory actually contains the skill.
+ */
+function resolveSkillPlugin(
+  bareSlug: string,
+  workspaceSlug: string,
+  workspaceRootPath: string,
+  workingDirectory?: string,
+): string {
+  // Priority order matches loadAllSkills: project (highest) > workspace > global (lowest)
+
+  // 1. Project: {workingDir}/.agents/skills/{slug}/SKILL.md
+  if (workingDirectory && existsSync(join(workingDirectory, PROJECT_AGENT_SKILLS_DIR, bareSlug, 'SKILL.md'))) {
+    return `${AGENTS_PLUGIN_NAME}:${bareSlug}`;
+  }
+
+  // 2. Workspace: {workspaceRoot}/skills/{slug}/SKILL.md
+  if (existsSync(join(workspaceRootPath, 'skills', bareSlug, 'SKILL.md'))) {
+    return `${workspaceSlug}:${bareSlug}`;
+  }
+
+  // 3. Global: ~/.agents/skills/{slug}/SKILL.md
+  if (existsSync(join(GLOBAL_AGENT_SKILLS_DIR, bareSlug, 'SKILL.md'))) {
+    return `${AGENTS_PLUGIN_NAME}:${bareSlug}`;
+  }
+
+  // Fallback: assume workspace plugin (original behavior)
+  return `${workspaceSlug}:${bareSlug}`;
 }
 
 // ============================================================

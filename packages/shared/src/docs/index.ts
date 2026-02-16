@@ -113,6 +113,8 @@ export const DOC_REFS = {
   mermaid: `${APP_ROOT}/docs/mermaid.md`,
   queue: `${APP_ROOT}/docs/queue.md`,
   dataTables: `${APP_ROOT}/docs/data-tables.md`,
+  htmlPreview: `${APP_ROOT}/docs/html-preview.md`,
+  pdfPreview: `${APP_ROOT}/docs/pdf-preview.md`,
   docsDir: `${APP_ROOT}/docs/`,
 } as const;
 

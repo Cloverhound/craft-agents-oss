@@ -44,8 +44,8 @@ export interface SessionMeta {
   labels?: string[]
   /** Permission mode ('safe', 'ask', 'allow-all') — used by view expressions */
   permissionMode?: string
-  /** Todo state for filtering */
-  todoState?: string
+  /** Session status for filtering */
+  sessionStatus?: string
   /** Role/type of the last message (for badge display without loading messages) */
   lastMessageRole?: 'user' | 'assistant' | 'plan' | 'tool' | 'error'
   /** Whether an async operation is ongoing (sharing, updating share, revoking, title regeneration) */
@@ -122,7 +122,7 @@ export function extractSessionMeta(session: Session): SessionMeta {
     hasUnread: session.hasUnread,
     labels: session.labels,
     permissionMode: session.permissionMode,
-    todoState: session.todoState,
+    sessionStatus: session.sessionStatus,
     lastMessageRole: session.lastMessageRole,
     // Use isAsyncOperationOngoing if available, fall back to deprecated isRegeneratingTitle
     isAsyncOperationOngoing: session.isAsyncOperationOngoing ?? session.isRegeneratingTitle,
@@ -461,7 +461,7 @@ export const syncSessionsToAtomsAtom = atom(
  * Uses promise deduplication to prevent redundant IPC calls from concurrent requests.
  *
  * IMPORTANT: This only merges messages into the existing session atom.
- * UI state fields (hasUnread, isFlagged, todoState, etc.) are preserved from
+ * UI state fields (hasUnread, isFlagged, sessionStatus, etc.) are preserved from
  * the in-memory atom, NOT overwritten with potentially stale disk data.
  * This prevents a race condition where optimistic updates (e.g., clearing the
  * NEW badge on session view) get clobbered by async message loading that reads
@@ -500,7 +500,16 @@ export const ensureSessionMessagesLoadedAtom = atom(
       const mergedSession = existingSession
         ? {
             ...existingSession,
-            messages: loadedSession.messages,
+            // CRITICAL: Don't clobber messages if session is actively streaming
+            // AND already has messages in the atom. Streaming events update the atom
+            // directly and may contain messages the IPC response doesn't know about
+            // (race window between IPC request and response).
+            // The `messages.length > 0` guard ensures Cmd+R reload works: after reload,
+            // the atom starts with messages=[] from getSessions(), so IPC response
+            // (which has full history from main process memory) must be used.
+            messages: existingSession.isProcessing && existingSession.messages.length > 0
+              ? existingSession.messages
+              : loadedSession.messages,
             tokenUsage: loadedSession.tokenUsage ?? existingSession.tokenUsage,
             sessionFolderPath: loadedSession.sessionFolderPath ?? existingSession.sessionFolderPath,
           }

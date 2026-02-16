@@ -3,12 +3,15 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import remarkGfm from 'remark-gfm'
 import { cn } from '../../lib/utils'
+import { FILE_EXTENSIONS_PATTERN } from '../../lib/file-classification'
 import { CodeBlock, InlineCode } from './CodeBlock'
 import { MarkdownDiffBlock } from './MarkdownDiffBlock'
 import { MarkdownJsonBlock } from './MarkdownJsonBlock'
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock'
 import { MarkdownDatatableBlock } from './MarkdownDatatableBlock'
 import { MarkdownSpreadsheetBlock } from './MarkdownSpreadsheetBlock'
+import { MarkdownHtmlBlock } from './MarkdownHtmlBlock'
+import { MarkdownPdfBlock } from './MarkdownPdfBlock'
 import { preprocessLinks } from './linkify'
 import remarkCollapsibleSections from './remarkCollapsibleSections'
 import { CollapsibleSection } from './CollapsibleSection'
@@ -71,7 +74,8 @@ interface CollapsibleContext {
 }
 
 // File path detection regex - matches paths starting with /, ~/, or ./
-const FILE_PATH_REGEX = /^(?:\/|~\/|\.\/)[\w\-./@]+\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yaml|yml|py|go|rs|css|scss|less|html|htm|txt|log|sh|bash|zsh|swift|kt|java|c|cpp|h|hpp|rb|php|xml|toml|ini|cfg|conf|env|sql|graphql|vue|svelte|astro|prisma)$/i
+// Extensions derived from file-classification.ts to stay in sync with preview support
+const FILE_PATH_REGEX = new RegExp(`^(?:/|~/|./)[\\w\\-./@]+\\.(?:${FILE_EXTENSIONS_PATTERN})$`, 'i')
 
 /**
  * Create custom components based on render mode.
@@ -174,7 +178,7 @@ function createComponents(
       ...baseComponents,
       // Inline code
       code: ({ className, children, ...props }) => {
-        const match = /language-(\w+)/.exec(className || '')
+        const match = /language-([\w-]+)/.exec(className || '')
         const isBlock = 'node' in props && props.node?.position?.start.line !== props.node?.position?.end.line
 
         // Block code
@@ -182,19 +186,27 @@ function createComponents(
           const code = String(children).replace(/\n$/, '')
           // Diff code blocks → pierre/diffs for a proper diff viewer
           if (match?.[1] === 'diff') {
-            return <MarkdownDiffBlock code={code} className="my-1" />
+            return <MarkdownDiffBlock code={code} className="my-2" />
           }
           // JSON code blocks → interactive tree viewer
           if (match?.[1] === 'json') {
-            return <MarkdownJsonBlock code={code} className="my-1" />
+            return <MarkdownJsonBlock code={code} className="my-2" />
           }
           // Datatable code blocks → sortable/filterable data table
           if (match?.[1] === 'datatable') {
-            return <MarkdownDatatableBlock code={code} className="my-1" />
+            return <MarkdownDatatableBlock code={code} className="my-2" />
           }
           // Spreadsheet code blocks → Excel-style grid
           if (match?.[1] === 'spreadsheet') {
-            return <MarkdownSpreadsheetBlock code={code} className="my-1" />
+            return <MarkdownSpreadsheetBlock code={code} className="my-2" />
+          }
+          // HTML preview blocks → sandboxed iframe
+          if (match?.[1] === 'html-preview') {
+            return <MarkdownHtmlBlock code={code} className="my-2" />
+          }
+          // PDF preview blocks → inline first page with expand to full viewer
+          if (match?.[1] === 'pdf-preview') {
+            return <MarkdownPdfBlock code={code} className="my-2" />
           }
           // Mermaid code blocks → zinc-styled SVG diagram.
           // Hide the inline expand button when the mermaid block is the first
@@ -206,9 +218,9 @@ function createComponents(
             const isFirstBlock = hideFirstMermaidExpand &&
                                 firstMermaidCodeRef?.current != null &&
                                 code === firstMermaidCodeRef.current
-            return <MarkdownMermaidBlock code={code} className="my-1" showExpandButton={!isFirstBlock} />
+            return <MarkdownMermaidBlock code={code} className="my-2" showExpandButton={!isFirstBlock} />
           }
-          return <CodeBlock code={code} language={match?.[1]} mode="full" className="my-1" />
+          return <CodeBlock code={code} language={match?.[1]} mode="full" className="my-2" />
         }
 
         // Inline code
@@ -263,26 +275,34 @@ function createComponents(
     ...baseComponents,
     // Full code blocks with copy button
     code: ({ className, children, ...props }) => {
-      const match = /language-(\w+)/.exec(className || '')
+      const match = /language-([\w-]+)/.exec(className || '')
       const isBlock = 'node' in props && props.node?.position?.start.line !== props.node?.position?.end.line
 
       if (match || isBlock) {
         const code = String(children).replace(/\n$/, '')
         // Diff code blocks → pierre/diffs for a proper diff viewer
         if (match?.[1] === 'diff') {
-          return <MarkdownDiffBlock code={code} className="my-1" />
+          return <MarkdownDiffBlock code={code} className="my-2" />
         }
         // JSON code blocks → interactive tree viewer
         if (match?.[1] === 'json') {
-          return <MarkdownJsonBlock code={code} className="my-1" />
+          return <MarkdownJsonBlock code={code} className="my-2" />
         }
         // Datatable code blocks → sortable/filterable data table
         if (match?.[1] === 'datatable') {
-          return <MarkdownDatatableBlock code={code} className="my-1" />
+          return <MarkdownDatatableBlock code={code} className="my-2" />
         }
         // Spreadsheet code blocks → Excel-style grid
         if (match?.[1] === 'spreadsheet') {
-          return <MarkdownSpreadsheetBlock code={code} className="my-1" />
+          return <MarkdownSpreadsheetBlock code={code} className="my-2" />
+        }
+        // HTML preview blocks → sandboxed iframe
+        if (match?.[1] === 'html-preview') {
+          return <MarkdownHtmlBlock code={code} className="my-2" />
+        }
+        // PDF preview blocks → inline first page with expand to full viewer
+        if (match?.[1] === 'pdf-preview') {
+          return <MarkdownPdfBlock code={code} className="my-2" />
         }
         // Mermaid code blocks → zinc-styled SVG diagram.
         // (Same first-block detection as minimal mode — see comment above.)
@@ -290,9 +310,9 @@ function createComponents(
           const isFirstBlock = hideFirstMermaidExpand &&
                               firstMermaidCodeRef?.current != null &&
                               code === firstMermaidCodeRef.current
-          return <MarkdownMermaidBlock code={code} className="my-1" showExpandButton={!isFirstBlock} />
+          return <MarkdownMermaidBlock code={code} className="my-2" showExpandButton={!isFirstBlock} />
         }
-        return <CodeBlock code={code} language={match?.[1]} mode="full" className="my-1" />
+        return <CodeBlock code={code} language={match?.[1]} mode="full" className="my-2" />
       }
 
       return <InlineCode>{children}</InlineCode>

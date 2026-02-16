@@ -408,6 +408,15 @@ const api: ElectronAPI = {
     }
   },
 
+  // LLM connections change listener (live updates when models are fetched)
+  onLlmConnectionsChanged: (callback: () => void) => {
+    const handler = () => { callback() }
+    ipcRenderer.on(IPC_CHANNELS.LLM_CONNECTIONS_CHANGED, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.LLM_CONNECTIONS_CHANGED, handler)
+    }
+  },
+
   // Views (dynamic, expression-based filters stored in views.json)
   listViews: (workspaceId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.VIEWS_LIST, workspaceId),

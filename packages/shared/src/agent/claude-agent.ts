@@ -1,4 +1,4 @@
-import { query, createSdkMcpServer, tool, AbortError, type Query, type SDKMessage, type SDKUserMessage, type SDKAssistantMessageError, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { query, createSdkMcpServer, tool, AbortError, type Query, type SDKUserMessage, type SDKAssistantMessageError, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { getDefaultOptions, resetClaudeConfigCheck } from './options.ts';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { z } from 'zod';
@@ -11,7 +11,7 @@ import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, type Workspace, type AuthType, getDefaultLlmConnection, getLlmConnection } from '../config/storage.ts';
 import { isLocalMcpEnabled } from '../workspaces/storage.ts';
 import { loadPlanFromPath, type SessionConfig as Session } from '../sessions/storage.ts';
-import { DEFAULT_MODEL, isClaudeModel, getDefaultSummarizationModel } from '../config/models.ts';
+import { DEFAULT_MODEL, isClaudeModel } from '../config/models.ts';
 import { getCredentialManager } from '../credentials/index.ts';
 import { updatePreferences, loadPreferences, formatPreferencesForPrompt, type UserPreferences } from '../config/preferences.ts';
 import type { FileAttachment } from '../utils/files.ts';
@@ -44,7 +44,9 @@ import {
 } from './mode-manager.ts';
 import { type PermissionsContext, permissionsConfigCache } from './permissions-config.ts';
 import { getSessionPlansPath, getSessionPath } from '../sessions/storage.ts';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { expandPath } from '../utils/paths.ts';
 import { extractWorkspaceSlug } from '../utils/workspace.ts';
 import {
@@ -94,7 +96,10 @@ import type { AgentEvent } from '@craft-agent/core/types';
 export type { AgentEvent };
 
 // Stateless tool matching — pure functions for SDK message → AgentEvent conversion
-import { ToolIndex, extractToolStarts, extractToolResults, type ContentBlock } from './tool-matching.ts';
+import { ToolIndex } from './tool-matching.ts';
+
+// Claude event adapter — extracts SDK message → AgentEvent conversion into testable class
+import { ClaudeEventAdapter, buildWindowsSkillsDirError as buildWindowsSkillsDirErrorFn } from './backend/claude/event-adapter.ts';
 
 // Re-export types for UI components
 export type { LoadedSource } from '../sources/types.ts';
@@ -127,6 +132,14 @@ export interface ClaudeAgentConfig {
   systemPromptPreset?: 'default' | 'mini' | string;
   /** Workspace-level HookSystem instance (shared across all agents in the workspace) */
   hookSystem?: HookSystem;
+  /**
+   * Per-session environment variable overrides for the SDK subprocess.
+   * Used to pass connection-specific config like ANTHROPIC_BASE_URL that
+   * must not be clobbered by concurrent sessions.
+   */
+  envOverrides?: Record<string, string>;
+  /** Mini/utility model for summarization, title generation, and mini completions. */
+  miniModel?: string;
 }
 
 // Permission request tracking
@@ -319,41 +332,12 @@ export type SdkMcpServerConfig =
   | { type: 'http' | 'sse'; url: string; headers?: Record<string, string> }
   | { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> };
 
-/**
- * Detect the Windows ENOENT .claude/skills directory error from the Claude Code SDK.
- * The SDK scans C:\ProgramData\ClaudeCode\.claude\skills for managed/enterprise skills
- * but crashes if the directory doesn't exist. This is an upstream SDK bug.
- * See: https://github.com/anthropics/claude-code/issues/20571
- *
- * Returns a typed_error event with user-friendly instructions, or null if not this error.
- */
-function buildWindowsSkillsDirError(errorText: string): { type: 'typed_error'; error: AgentError } | null {
-  if (!errorText.includes('ENOENT') || !errorText.includes('skills')) {
-    return null;
-  }
-
-  const pathMatch = errorText.match(/scandir\s+'([^']+)'/);
-  const missingPath = pathMatch?.[1] || 'C:\\ProgramData\\ClaudeCode\\.claude\\skills';
-
-  return {
-    type: 'typed_error',
-    error: {
-      code: 'unknown_error',
-      title: 'Windows Setup Required',
-      message: `The SDK requires a directory that doesn't exist: ${missingPath} — Create this folder in File Explorer, then restart the app.`,
-      details: [
-        `PowerShell (run as Administrator):`,
-        `New-Item -ItemType Directory -Force -Path "${missingPath}"`,
-      ],
-      actions: [],
-      canRetry: true,
-      originalError: errorText,
-    },
-  };
-}
+// buildWindowsSkillsDirError is now in backend/claude/event-adapter.ts (exported)
+const buildWindowsSkillsDirError = buildWindowsSkillsDirErrorFn;
 
 export class ClaudeAgent extends BaseAgent {
   // Note: ClaudeAgentConfig is compatible with BackendConfig, so we use the inherited this.config
+  private hookSystem?: HookSystem;
   private currentQuery: Query | null = null;
   private currentQueryAbortController: AbortController | null = null;
   private lastAbortReason: AbortReason | null = null;
@@ -371,8 +355,8 @@ export class ClaudeAgent extends BaseAgent {
   private activeSkillSlugs: Set<string> = new Set();
   // Safe mode state - user-controlled read-only exploration mode
   private safeMode: boolean = false;
-  // SDK tools list (captured from init message)
-  private sdkTools: string[] = [];
+  // Event adapter for SDK message → AgentEvent conversion (testable, pluggable)
+  private eventAdapter!: ClaudeEventAdapter;
   // Thinking level and ultrathink override are now managed by BaseAgent
   // Pinned system prompt components (captured on first chat, used for consistency after compaction)
   private pinnedPreferencesPrompt: string | null = null;
@@ -494,6 +478,8 @@ export class ClaudeAgent extends BaseAgent {
       onSdkSessionIdUpdate: config.onSdkSessionIdUpdate,
       onSdkSessionIdCleared: config.onSdkSessionIdCleared,
       getRecoveryMessages: config.getRecoveryMessages,
+      envOverrides: config.envOverrides,
+      miniModel: config.miniModel,
     };
 
     // Call BaseAgent constructor - initializes model, thinkingLevel, permissionManager, sourceManager, etc.
@@ -501,6 +487,13 @@ export class ClaudeAgent extends BaseAgent {
     super(backendConfig, DEFAULT_MODEL, CLAUDE_CONTEXT_WINDOW);
 
     this.isHeadless = config.isHeadless ?? false;
+    this.hookSystem = config.hookSystem;
+
+    // Initialize event adapter for SDK message → AgentEvent conversion
+    this.eventAdapter = new ClaudeEventAdapter({
+      onDebug: (msg) => this.onDebug?.(msg),
+      mapSDKError: (errorCode) => this.mapSDKErrorToTypedError(errorCode),
+    });
 
     // Log which model is being used (helpful for debugging custom models)
     this.debug(`Using model: ${model}`);
@@ -881,7 +874,7 @@ export class ClaudeAgent extends BaseAgent {
       }
 
       const options: Options = {
-        ...getDefaultOptions(),
+        ...getDefaultOptions(this.config.envOverrides),
         model,
         // Capture stderr from SDK subprocess for error diagnostics
         // This helps identify why sessions fail with "process exited with code 1"
@@ -955,7 +948,7 @@ export class ClaudeAgent extends BaseAgent {
         // User hooks from hooks.json are merged with internal hooks
         hooks: (() => {
           // Build user-defined hooks from hooks.json using the workspace-level HookSystem
-          const userHooks = this.config.hookSystem?.buildSdkHooks() ?? {};
+          const userHooks: Partial<Record<string, SdkHookCallbackMatcher[]>> = this.hookSystem?.buildSdkHooks() ?? {};
           if (Object.keys(userHooks).length > 0) {
             debug('[CraftAgent] User SDK hooks loaded:', Object.keys(userHooks).join(', '));
           }
@@ -1170,6 +1163,8 @@ export class ClaudeAgent extends BaseAgent {
                 const skillResult = qualifySkillName(
                   modifiedInput || toolInput,
                   workspaceSlug,
+                  this.workspaceRootPath,
+                  this.config.session?.workingDirectory,
                   (msg) => this.onDebug?.(msg)
                 );
                 if (skillResult.modified) {
@@ -1452,6 +1447,7 @@ export class ClaudeAgent extends BaseAgent {
           // Internal hooks run first (permissions), then user hooks
           const mergedHooks: Record<string, SdkHookCallbackMatcher[]> = { ...internalHooks };
           for (const [event, matchers] of Object.entries(userHooks) as [string, SdkHookCallbackMatcher[]][]) {
+            if (!matchers) continue;
             if (mergedHooks[event]) {
               // Append user hooks after internal hooks
               mergedHooks[event] = [...mergedHooks[event]!, ...matchers];
@@ -1475,8 +1471,20 @@ export class ClaudeAgent extends BaseAgent {
         },
         // Selectively disable tools - file tools are disabled (use MCP), web/code controlled by settings
         disallowedTools,
-        // Load workspace as SDK plugin (enables skills, commands, agents from workspace)
-        plugins: [{ type: 'local' as const, path: this.workspaceRootPath }],
+        // Load skill directories as SDK plugins (enables skills from all 3 tiers)
+        // Only register directories that exist to avoid SDK warnings/errors
+        plugins: [
+          { type: 'local' as const, path: this.workspaceRootPath },
+          // Project-level skills: {workingDir}/.agents/
+          ...(this.config.session?.workingDirectory &&
+              existsSync(join(this.config.session.workingDirectory, '.agents'))
+            ? [{ type: 'local' as const, path: join(this.config.session.workingDirectory, '.agents') }]
+            : []),
+          // Global skills: ~/.agents/
+          ...(existsSync(join(homedir(), '.agents'))
+            ? [{ type: 'local' as const, path: join(homedir(), '.agents') }]
+            : []),
+        ],
       };
 
       // Track whether we're trying to resume a session (for error handling)
@@ -1522,36 +1530,14 @@ export class ClaudeAgent extends BaseAgent {
         runner.sendText(prompt);
       }
 
-      // ═══════════════════════════════════════════════════════════════════════════
-      // STATELESS TOOL MATCHING (see tool-matching.ts for details)
-      // ═══════════════════════════════════════════════════════════════════════════
-      //
-      // Tool matching uses direct ID-based lookup instead of FIFO queues.
-      // The SDK provides:
-      // - parent_tool_use_id on every message → identifies subagent context
-      // - tool_use_id on tool_result content blocks → directly identifies which tool
-      //
-      // This eliminates order-dependent matching. Same messages → same output.
-      //
-      // Three data structures are needed:
-      // - toolIndex: append-only map of toolUseId → {name, input} (order-independent)
-      // - emittedToolStarts: append-only set for stream/assistant dedup (order-independent)
-      // - activeParentTools: tracks running Task tool IDs for fallback parent assignment
-      //   (used when SDK's parent_tool_use_id is null but a Task is active)
-      // ═══════════════════════════════════════════════════════════════════════════
-      const toolIndex = new ToolIndex();
-      const emittedToolStarts = new Set<string>();
-      const activeParentTools = new Set<string>();
-      // Session directory for reading tool metadata — prevents race condition when
-      // concurrent sessions clobber the singleton _sessionDir in toolMetadataStore.
+      // Initialize event adapter for this turn
+      // Session directory prevents race condition when concurrent sessions clobber toolMetadataStore.
       const metadataSessionDir = getSessionPath(this.workspaceRootPath, sessionId);
+      this.eventAdapter.updateSessionDir(metadataSessionDir);
+      this.eventAdapter.startTurn();
 
       // Process SDK messages and convert to AgentEvents
       let receivedComplete = false;
-      // Track text waiting for stop_reason from message_delta
-      let pendingTextForStopReason: string | null = null;
-      // Track current turn ID from message_start (correlation ID for grouping events)
-      let currentTurnId: string | null = null;
       // Track whether we received any assistant content (for empty response detection)
       // When SDK returns empty response (e.g., failed resume), we need to detect and recover
       let receivedAssistantContent = false;
@@ -1620,20 +1606,10 @@ export class ClaudeAgent extends BaseAgent {
             this.pendingResumeAt = null;
           }
 
-          const events = await this.convertSDKMessage(
-            message,
-            toolIndex,
-            emittedToolStarts,
-            activeParentTools,
-            pendingTextForStopReason,
-            (text) => { pendingTextForStopReason = text; },
-            currentTurnId,
-            (id) => { currentTurnId = id; },
-            metadataSessionDir,
-          );
+          const events = await this.eventAdapter.adapt(message);
           for (const event of events) {
             // Check for tool-not-found errors on inactive sources and attempt auto-activation
-            const inactiveSourceError = this.detectInactiveSourceToolError(event, toolIndex);
+            const inactiveSourceError = this.detectInactiveSourceToolError(event, this.eventAdapter.getToolIndex());
 
             if (inactiveSourceError && this.onSourceActivationRequest) {
               const { sourceSlug, toolName } = inactiveSourceError;
@@ -1729,9 +1705,9 @@ export class ClaudeAgent extends BaseAgent {
         // Defensive: flush any pending text that wasn't emitted
         // This can happen if the SDK sends an assistant message with text but skips the
         // message_delta event that normally triggers text_complete (e.g., in some ultrathink scenarios)
-        if (pendingTextForStopReason) {
-          yield { type: 'text_complete', text: pendingTextForStopReason, isIntermediate: false, turnId: currentTurnId || undefined };
-          pendingTextForStopReason = null;
+        const flushedEvent = this.eventAdapter.flushPending();
+        if (flushedEvent) {
+          yield flushedEvent;
         }
 
         // Defensive: emit complete if SDK didn't send result message
@@ -2419,380 +2395,6 @@ export class ClaudeAgent extends BaseAgent {
     };
   }
 
-  private async convertSDKMessage(
-    message: SDKMessage,
-    toolIndex: ToolIndex,
-    emittedToolStarts: Set<string>,
-    activeParentTools: Set<string>,
-    pendingText: string | null,
-    setPendingText: (text: string | null) => void,
-    turnId: string | null,
-    setTurnId: (id: string | null) => void,
-    sessionDir?: string,
-  ): Promise<AgentEvent[]> {
-    const events: AgentEvent[] = [];
-
-    // Debug: log all SDK message types to understand MCP tool result flow
-    if (this.onDebug) {
-      const msgInfo = message.type === 'user' && 'tool_use_result' in message
-        ? `user (tool_result for ${(message as any).parent_tool_use_id})`
-        : message.type;
-      this.onDebug(`SDK message: ${msgInfo}`);
-    }
-
-    switch (message.type) {
-      case 'assistant': {
-        // Check for SDK-level errors FIRST (auth, network, rate limits, etc.)
-        // These errors are set by the SDK when API calls fail
-        if ('error' in message && message.error) {
-          // Extract actual API error from SDK debug log for better error details
-          // Uses async to allow retry with delays for race condition handling
-          const errorEvent = await this.mapSDKErrorToTypedError(message.error);
-          events.push(errorEvent);
-          // Don't process content blocks when there's an error
-          break;
-        }
-
-        // Skip replayed messages when resuming a session - they're historical
-        if ('isReplay' in message && message.isReplay) {
-          break;
-        }
-
-        // Track usage from non-sidechain assistant messages for accurate context window display
-        // Skip sidechain messages (from subagents) - only main chain affects primary context
-        const isSidechain = message.parent_tool_use_id !== null;
-        if (!isSidechain && message.message.usage) {
-          this.lastAssistantUsage = {
-            input_tokens: message.message.usage.input_tokens,
-            cache_read_input_tokens: message.message.usage.cache_read_input_tokens ?? 0,
-            cache_creation_input_tokens: message.message.usage.cache_creation_input_tokens ?? 0,
-          };
-
-          // Emit real-time usage update for context display
-          // inputTokens = context size actually sent to API (includes cache tokens)
-          const currentInputTokens =
-            this.lastAssistantUsage.input_tokens +
-            this.lastAssistantUsage.cache_read_input_tokens +
-            this.lastAssistantUsage.cache_creation_input_tokens;
-
-          events.push({
-            type: 'usage_update',
-            usage: {
-              inputTokens: currentInputTokens,
-              // contextWindow comes from modelUsage in result - use cached value if available
-              contextWindow: this.cachedContextWindow,
-            },
-          });
-        }
-
-        // Full assistant message with content blocks
-        const content = message.message.content;
-
-        // Extract text from content blocks
-        let textContent = '';
-        for (const block of content) {
-          if (block.type === 'text') {
-            textContent += block.text;
-          }
-        }
-
-        // Stateless tool start extraction — uses SDK's parent_tool_use_id directly.
-        // Falls back to activeParentTools when SDK doesn't provide parent info.
-        const sdkParentId = message.parent_tool_use_id;
-        const toolStartEvents = extractToolStarts(
-          content as ContentBlock[],
-          sdkParentId,
-          toolIndex,
-          emittedToolStarts,
-          turnId || undefined,
-          activeParentTools,
-          sessionDir,
-        );
-
-        // Track active Task tools for fallback parent assignment.
-        // When a Task tool starts, add it to the active set.
-        // This enables fallback parent assignment for child tools when SDK's
-        // parent_tool_use_id is null.
-        for (const event of toolStartEvents) {
-          if (event.type === 'tool_start' && event.toolName === 'Task') {
-            activeParentTools.add(event.toolUseId);
-          }
-        }
-
-        events.push(...toolStartEvents);
-
-        if (textContent) {
-          // Don't emit text_complete yet - wait for message_delta to get actual stop_reason
-          // The assistant message arrives with stop_reason: null during streaming
-          // The actual stop_reason comes in the message_delta event
-          setPendingText(textContent);
-        }
-        break;
-      }
-
-      case 'stream_event': {
-        // Streaming partial message
-        const event = message.event;
-        // Debug: log all stream events to understand tool result flow
-        if (this.onDebug && event.type !== 'content_block_delta') {
-          this.onDebug(`stream_event: ${event.type}, content_type=${(event as any).content_block?.type || (event as any).delta?.type || 'n/a'}`);
-        }
-        // Capture turn ID from message_start (arrives before any content events)
-        // This ID correlates all events in an assistant turn
-        if (event.type === 'message_start') {
-          const messageId = (event as any).message?.id;
-          if (messageId) {
-            setTurnId(messageId);
-          }
-        }
-        // message_delta contains the actual stop_reason - emit pending text now
-        if (event.type === 'message_delta') {
-          const stopReason = (event as any).delta?.stop_reason;
-          if (pendingText) {
-            const isIntermediate = stopReason === 'tool_use';
-            // SDK's parent_tool_use_id identifies the subagent context for this text
-            // (null = main agent, Task ID = inside subagent)
-            events.push({ type: 'text_complete', text: pendingText, isIntermediate, turnId: turnId || undefined, parentToolUseId: message.parent_tool_use_id || undefined });
-            setPendingText(null);
-          }
-        }
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-          events.push({ type: 'text_delta', text: event.delta.text, turnId: turnId || undefined, parentToolUseId: message.parent_tool_use_id || undefined });
-        } else if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
-          // Stateless tool start extraction from stream events.
-          // SDK's parent_tool_use_id is authoritative for parent assignment.
-          // Falls back to activeParentTools when SDK doesn't provide parent info.
-          // Stream events arrive with empty input — the full input comes later
-          // in the assistant message (extractToolStarts handles dedup + re-emit).
-          const toolBlock = event.content_block;
-          const sdkParentId = message.parent_tool_use_id;
-          const streamBlocks: ContentBlock[] = [{
-            type: 'tool_use' as const,
-            id: toolBlock.id,
-            name: toolBlock.name,
-            input: (toolBlock.input ?? {}) as Record<string, unknown>,
-          }];
-          const streamEvents = extractToolStarts(
-            streamBlocks,
-            sdkParentId,
-            toolIndex,
-            emittedToolStarts,
-            turnId || undefined,
-            activeParentTools,
-            sessionDir,
-          );
-
-          // Track active Task tools for fallback parent assignment
-          for (const evt of streamEvents) {
-            if (evt.type === 'tool_start' && evt.toolName === 'Task') {
-              activeParentTools.add(evt.toolUseId);
-            }
-          }
-
-          events.push(...streamEvents);
-        }
-        break;
-      }
-
-      case 'user': {
-        // Skip replayed messages when resuming a session - they're historical
-        if ('isReplay' in message && message.isReplay) {
-          break;
-        }
-
-        // ─────────────────────────────────────────────────────────────────────────
-        // STATELESS TOOL RESULT MATCHING
-        // ─────────────────────────────────────────────────────────────────────────
-        // Uses extractToolResults() which matches results by explicit tool_use_id
-        // from content blocks — no FIFO queues, no parent stacks needed.
-        // Falls back to convenience field tool_use_result when content blocks
-        // are unavailable (e.g., some in-process MCP tools).
-        // ─────────────────────────────────────────────────────────────────────────
-        if (message.tool_use_result !== undefined || ('message' in message && message.message)) {
-          // Extract content blocks from the SDK message
-          const msgContent = ('message' in message && message.message)
-            ? ((message.message as { content?: unknown[] }).content ?? [])
-            : [];
-          const contentBlocks = (Array.isArray(msgContent) ? msgContent : []) as ContentBlock[];
-
-          const sdkParentId = message.parent_tool_use_id;
-          const toolUseResultValue = message.tool_use_result;
-
-          const resultEvents = extractToolResults(
-            contentBlocks,
-            sdkParentId,
-            toolUseResultValue,
-            toolIndex,
-            turnId || undefined,
-          );
-
-          // Remove completed Task tools from activeParentTools.
-          // When a Task tool result arrives, we no longer need to track it
-          // as an active parent for fallback assignment.
-          for (const event of resultEvents) {
-            if (event.type === 'tool_result' && event.toolName === 'Task') {
-              activeParentTools.delete(event.toolUseId);
-            }
-          }
-
-          events.push(...resultEvents);
-        }
-        break;
-      }
-
-      case 'tool_progress': {
-        // tool_progress events are emitted for subagent child tools.
-        // Uses SDK's parent_tool_use_id as authoritative parent assignment.
-        const progress = message as {
-          tool_use_id: string;
-          tool_name: string;
-          parent_tool_use_id: string | null;
-          elapsed_time_seconds?: number;
-        };
-
-        // Forward elapsed time to UI for live progress updates
-        // Use parent_tool_use_id if this is a child tool, so progress updates the parent Task
-        if (progress.elapsed_time_seconds !== undefined) {
-          events.push({
-            type: 'task_progress',
-            toolUseId: progress.parent_tool_use_id || progress.tool_use_id,
-            elapsedSeconds: progress.elapsed_time_seconds,
-            turnId: turnId || undefined,
-          });
-        }
-
-        // If we haven't seen this tool yet, emit a tool_start via extractToolStarts.
-        // This handles child tools discovered through progress events before
-        // stream_event or assistant message arrives.
-        if (!emittedToolStarts.has(progress.tool_use_id)) {
-          const progressBlocks: ContentBlock[] = [{
-            type: 'tool_use' as const,
-            id: progress.tool_use_id,
-            name: progress.tool_name,
-            input: {},
-          }];
-          const progressEvents = extractToolStarts(
-            progressBlocks,
-            progress.parent_tool_use_id,
-            toolIndex,
-            emittedToolStarts,
-            turnId || undefined,
-            activeParentTools,
-            sessionDir,
-          );
-
-          // Track active Task tools discovered via progress events
-          for (const evt of progressEvents) {
-            if (evt.type === 'tool_start' && evt.toolName === 'Task') {
-              activeParentTools.add(evt.toolUseId);
-            }
-          }
-
-          events.push(...progressEvents);
-        }
-        break;
-      }
-
-      case 'result': {
-        // Debug: log result message details (stderr to avoid SDK JSON pollution)
-        console.error(`[ClaudeAgent] result message: subtype=${message.subtype}, errors=${'errors' in message ? JSON.stringify((message as any).errors) : 'none'}`);
-
-        // Get contextWindow from modelUsage (this is correct - it's the model's context window size)
-        const modelUsageEntries = Object.values(message.modelUsage || {});
-        const primaryModelUsage = modelUsageEntries[0];
-
-        // Cache contextWindow for real-time usage_update events in subsequent turns
-        if (primaryModelUsage?.contextWindow) {
-          this.cachedContextWindow = primaryModelUsage.contextWindow;
-        }
-
-        // Use lastAssistantUsage for context window display (per-message, not cumulative)
-        // result.modelUsage is cumulative across the entire session (for billing)
-        // but we need the actual current context size from the last assistant message
-        // See: https://github.com/anthropics/claude-agent-sdk-typescript/issues/66
-        let inputTokens: number;
-        let cacheRead: number;
-        let cacheCreation: number;
-
-        if (this.lastAssistantUsage) {
-          // Use tracked per-message usage (correct for context display)
-          inputTokens = this.lastAssistantUsage.input_tokens +
-                        this.lastAssistantUsage.cache_read_input_tokens +
-                        this.lastAssistantUsage.cache_creation_input_tokens;
-          cacheRead = this.lastAssistantUsage.cache_read_input_tokens;
-          cacheCreation = this.lastAssistantUsage.cache_creation_input_tokens;
-        } else {
-          // Fallback to result.usage if no assistant message was tracked
-          cacheRead = message.usage.cache_read_input_tokens ?? 0;
-          cacheCreation = message.usage.cache_creation_input_tokens ?? 0;
-          inputTokens = message.usage.input_tokens + cacheRead + cacheCreation;
-        }
-
-        const usage = {
-          inputTokens,
-          outputTokens: message.usage.output_tokens,
-          cacheReadTokens: cacheRead,
-          cacheCreationTokens: cacheCreation,
-          costUsd: message.total_cost_usd,
-          contextWindow: primaryModelUsage?.contextWindow,
-        };
-
-        if (message.subtype === 'success') {
-          events.push({ type: 'complete', usage });
-        } else {
-          // Error result - emit error then complete with whatever usage we have
-          const errorMsg = 'errors' in message ? message.errors.join(', ') : 'Query failed';
-
-          // Check for Windows SDK setup error (missing .claude/skills directory)
-          const windowsError = buildWindowsSkillsDirError(errorMsg);
-          if (windowsError) {
-            events.push(windowsError);
-          } else {
-            events.push({ type: 'error', message: errorMsg });
-          }
-          events.push({ type: 'complete', usage });
-        }
-        break;
-      }
-
-      case 'system': {
-        // System messages (init, compaction, status)
-        if (message.subtype === 'init') {
-          // Capture tools list from SDK init message
-          if ('tools' in message && Array.isArray(message.tools)) {
-            this.sdkTools = message.tools;
-            this.onDebug?.(`SDK init: captured ${this.sdkTools.length} tools`);
-          }
-        } else if (message.subtype === 'compact_boundary') {
-          events.push({
-            type: 'info',
-            message: 'Compacted Conversation',
-          });
-        } else if (message.subtype === 'status' && message.status === 'compacting') {
-          events.push({ type: 'status', message: 'Compacting conversation...' });
-        }
-        break;
-      }
-
-      case 'auth_status': {
-        if (message.error) {
-          events.push({ type: 'error', message: `Auth error: ${message.error}. Try running /auth to re-authenticate.` });
-        }
-        break;
-      }
-
-      default: {
-        // Log unhandled message types for debugging
-        if (this.onDebug) {
-          this.onDebug(`Unhandled SDK message type: ${(message as any).type}`);
-        }
-        break;
-      }
-    }
-
-    return events;
-  }
-
   /**
    * Check if a tool result error indicates a "tool not found" for an inactive source.
    * This is used to detect when Claude tries to call a tool from a source that exists
@@ -2903,7 +2505,7 @@ export class ClaudeAgent extends BaseAgent {
    * Get the list of SDK tools (captured from init message)
    */
   getSdkTools(): string[] {
-    return this.sdkTools;
+    return this.eventAdapter.sdkTools;
   }
 
   setModel(model: string): void {
@@ -3133,10 +2735,13 @@ export class ClaudeAgent extends BaseAgent {
    */
   async runMiniCompletion(prompt: string): Promise<string | null> {
     try {
-      const model = this.config.miniModel ?? getDefaultSummarizationModel();
+      if (!this.config.miniModel) {
+        throw new Error('ClaudeAgent.runMiniCompletion: config.miniModel is required');
+      }
+      const model = this.config.miniModel;
 
       const options = {
-        ...getDefaultOptions(),
+        ...getDefaultOptions(this.config.envOverrides),
         model,
         maxTurns: 1,
         systemPrompt: 'Reply with ONLY the requested text. No explanation.', // Minimal - no Claude Code preset
@@ -3156,6 +2761,7 @@ export class ClaudeAgent extends BaseAgent {
       return result.trim() || null;
     } catch (error) {
       this.debug(`[runMiniCompletion] Failed: ${error}`);
+      debug(`[ClaudeAgent.runMiniCompletion] Failed: ${error}`);
       return null;
     }
   }

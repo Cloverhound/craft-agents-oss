@@ -15,6 +15,7 @@
 import { homedir } from 'os';
 import { debug } from '../utils/debug.ts';
 import { resolve } from 'path';
+import { FEATURE_FLAGS } from '../feature-flags.ts';
 import type { PermissionsContext, MergedPermissionsConfig } from './permissions-config.ts';
 import {
   validateBashCommand,
@@ -1628,21 +1629,6 @@ export function shouldAllowToolInMode(
             reason: lines.join('\n'),
           };
         }
-        // Check if this looks like a write attempt but we couldn't extract the path
-        if (looksLikePotentialWrite(command)) {
-          debug(`[Mode] Bash command looks like a write but path extraction failed`);
-          const plansExample = options?.plansFolderPath
-            ? `  Plans: printf '...' > "${options.plansFolderPath}/plan_<descriptive-name>.md"\n` : '';
-          const dataExample = options?.dataFolderPath
-            ? `  Data:  printf '...' > "${options.dataFolderPath}/output.json"\n` : '';
-          return {
-            allowed: false,
-            reason: `Bash command appears to write files but the target path couldn't be detected.\n\n` +
-                    `If writing to an allowed folder, use one of these patterns:\n` +
-                    plansExample + dataExample + `\n` +
-                    `Or ask the user to switch to Ask or Auto mode (${config.shortcutHint}).`,
-          };
-        }
       }
 
       // Return detailed error message explaining exactly why the command was blocked
@@ -1756,6 +1742,7 @@ export function shouldAllowToolInMode(
         'mcp__session__mermaid_validate',
         'mcp__session__source_test',
         'mcp__session__transform_data',
+        ...(FEATURE_FLAGS.sourceTemplates ? ['mcp__session__render_template'] : []),
       ];
       if (readOnlySessionTools.includes(toolName)) {
         return { allowed: true };

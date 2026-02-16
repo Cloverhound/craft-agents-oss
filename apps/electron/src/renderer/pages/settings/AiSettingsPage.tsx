@@ -527,6 +527,12 @@ export default function AiSettingsPage() {
     setEditingConnectionSlug(null)
   }, [setFullscreenOverlayOpen])
 
+  // Derive existing slugs for unique slug generation
+  const existingSlugs = useMemo(
+    () => new Set(llmConnections.map(c => c.slug)),
+    [llmConnections],
+  )
+
   // OnboardingWizard hook for editing API connection
   const apiSetupOnboarding = useOnboarding({
     initialStep: 'api-setup',
@@ -540,6 +546,8 @@ export default function AiSettingsPage() {
       closeApiSetup()
       apiSetupOnboarding.reset()
     },
+    editingSlug: editingConnectionSlug,
+    existingSlugs,
   })
 
   const handleApiSetupFinish = useCallback(() => {

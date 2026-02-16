@@ -1,4 +1,5 @@
 import LinkifyIt from 'linkify-it'
+import { FILE_EXTENSIONS_PATTERN } from '../../lib/file-classification'
 
 /**
  * Linkify - URL and file path detection for markdown preprocessing
@@ -11,8 +12,8 @@ import LinkifyIt from 'linkify-it'
 const linkify = new LinkifyIt()
 
 // File path regex - detects /path, ~/path, ./path with common extensions
-// Matches paths that start with /, ~/, or ./ followed by path chars and a file extension
-const FILE_PATH_REGEX = /(?:^|[\s([\{<])((\/|~\/|\.\/)[\w\-./@]+\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yaml|yml|py|go|rs|css|scss|less|html|htm|txt|log|sh|bash|zsh|swift|kt|java|c|cpp|h|hpp|rb|php|xml|toml|ini|cfg|conf|env|sql|graphql|vue|svelte|astro|prisma|dockerfile|makefile|gitignore))(?=[\s)\]}\.,;:!?>]|$)/gi
+// Extensions derived from file-classification.ts to stay in sync with preview support
+const FILE_PATH_REGEX = new RegExp(`(?:^|[\\s([\\{<])((/|~/|./)[\\w\\-./@]+\\.(?:${FILE_EXTENSIONS_PATTERN}))(?=[\\s)\\]}\\.,:;!?>]|$)`, 'gi')
 
 interface DetectedLink {
   type: 'url' | 'email' | 'file'

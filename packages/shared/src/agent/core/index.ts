@@ -126,3 +126,6 @@ export {
   stripMcpMetadata, // deprecated alias for backwards compatibility
   validateConfigWrite,
 } from './pre-tool-use.ts';
+
+// Re-export skill plugin constant (used by renderer for mention qualification)
+export { AGENTS_PLUGIN_NAME } from '../../skills/types.ts';

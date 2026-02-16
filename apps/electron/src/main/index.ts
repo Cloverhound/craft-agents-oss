@@ -66,7 +66,7 @@ Sentry.setUser({ id: machineId })
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { SessionManager } from './sessions'
-import { registerIpcHandlers } from './ipc'
+import { registerIpcHandlers, startCodexModelRefresh, stopCodexModelRefresh } from './ipc'
 import { createApplicationMenu } from './menu'
 import { WindowManager } from './window-manager'
 import { loadWindowState, saveWindowState } from './window-state'
@@ -85,6 +85,7 @@ import log, { isDebugMode, mainLog, getLogFilePath } from './logger'
 import { setPerfEnabled, enableDebug } from '@craft-agent/shared/utils'
 import { initNotificationService, clearBadgeCount, initBadgeIcon, initInstanceBadge } from './notifications'
 import { checkForUpdatesOnLaunch, setWindowManager as setAutoUpdateWindowManager, isUpdating } from './auto-update'
+import { validateGitBashPath } from './git-bash'
 
 // Initialize electron-log for renderer process support
 log.initialize()
@@ -295,6 +296,22 @@ app.whenReady().then(async () => {
     // Initialize notification service
     initNotificationService(windowManager)
 
+    // Restore persisted Git Bash path on Windows (must happen before any SDK subprocess spawn)
+    if (process.platform === 'win32') {
+      const { getGitBashPath, clearGitBashPath } = await import('@craft-agent/shared/config')
+      const gitBashPath = getGitBashPath()
+      if (gitBashPath) {
+        const validation = await validateGitBashPath(gitBashPath)
+        if (validation.valid) {
+          process.env.CLAUDE_CODE_GIT_BASH_PATH = validation.path
+        } else {
+          clearGitBashPath()
+          delete process.env.CLAUDE_CODE_GIT_BASH_PATH
+          mainLog.warn(`Cleared invalid persisted Git Bash path: ${gitBashPath}`)
+        }
+      }
+    }
+
     // Register IPC handlers (must happen before window creation)
     registerIpcHandlers(sessionManager, windowManager)
 
@@ -303,6 +320,9 @@ app.whenReady().then(async () => {
 
     // Initialize auth (must happen after window creation for error reporting)
     await sessionManager.initialize()
+
+    // Start periodic Codex model discovery (fetches model/list from app-server every 30 min)
+    startCodexModelRefresh()
 
     // Run credential health check at startup to detect issues early
     // (corruption, machine migration, missing credentials for default connection)
@@ -430,6 +450,9 @@ app.on('before-quit', async (event) => {
     }
     // Clean up SessionManager resources (file watchers, timers, etc.)
     sessionManager.cleanup()
+
+    // Stop periodic Codex model refresh
+    stopCodexModelRefresh()
 
     // Clean up power manager (release power blocker)
     const { cleanup: cleanupPowerManager } = await import('./power-manager')

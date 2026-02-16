@@ -170,7 +170,8 @@ export function splitCommands(commandStr: string): string[] {
  */
 export function extractCommandName(subCommand: string): string | undefined {
   // Use shell-quote for proper tokenization (handles quotes, escapes, etc.)
-  // Guard against parser errors from malformed shell substitutions.
+  // shell-quote doesn't support all bash syntax and can throw on malformed input.
+  // Guard against parser errors by using the safe parser wrapper.
   const tokens = parseShellTokensSafe(subCommand);
   if (!tokens) {
     return undefined;

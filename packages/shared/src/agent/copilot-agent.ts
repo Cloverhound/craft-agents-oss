@@ -81,6 +81,7 @@ type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
 // Event adapter
 import { CopilotEventAdapter } from './backend/copilot/event-adapter.ts';
+import { EventQueue } from './backend/event-queue.ts';
 
 // PreToolUse utilities
 import {
@@ -192,10 +193,8 @@ export class CopilotAgent extends BaseAgent {
   // Event adapter
   private adapter: CopilotEventAdapter;
 
-  // Event queue for streaming (AsyncGenerator pattern — same as CodexAgent)
-  private eventQueue: AgentEvent[] = [];
-  private eventResolvers: Array<(done: boolean) => void> = [];
-  private turnComplete: boolean = false;
+  // Event queue for streaming (AsyncGenerator pattern — shared with CodexAgent)
+  private eventQueue = new EventQueue();
 
   // Pending permission requests
   private pendingPermissions: Map<string, {
@@ -340,9 +339,7 @@ export class CopilotAgent extends BaseAgent {
     // Reset state for new turn
     this._isProcessing = true;
     this.abortReason = undefined;
-    this.turnComplete = false;
-    this.eventQueue = [];
-    this.eventResolvers = [];
+    this.eventQueue.reset();
     this.currentUserMessage = message;
     this.adapter.startTurn();
 
@@ -485,27 +482,8 @@ export class CopilotAgent extends BaseAgent {
       // Send message
       await this.session.send({ prompt: fullMessage });
 
-      // Yield events from queue
-      while (!this.turnComplete || this.eventQueue.length > 0) {
-        if (this.eventQueue.length > 0) {
-          const event = this.eventQueue.shift()!;
-          yield event;
-
-          // Check if this was a complete event
-          if (event.type === 'complete') {
-            break;
-          }
-        } else {
-          // Wait for more events
-          const done = await this.waitForEvent();
-          if (done) break;
-        }
-      }
-
-      // Yield any remaining events
-      while (this.eventQueue.length > 0) {
-        yield this.eventQueue.shift()!;
-      }
+      // Yield events from queue until turn completes
+      yield* this.eventQueue.drain();
     } catch (error) {
       if (error instanceof Error && error.message.includes('abort')) {
         if (this.abortReason === AbortReason.PlanSubmitted) {
@@ -588,7 +566,7 @@ export class CopilotAgent extends BaseAgent {
           totalCost += model.requests.cost;
         }
         // Emit a final usage_update with aggregated session metrics
-        this.enqueueEvent({
+        this.eventQueue.enqueue({
           type: 'usage_update',
           usage: {
             inputTokens: totalInput,
@@ -648,48 +626,16 @@ export class CopilotAgent extends BaseAgent {
 
     // Adapt event to AgentEvents
     for (const agentEvent of this.adapter.adaptEvent(event)) {
-      this.enqueueEvent(agentEvent);
+      this.eventQueue.enqueue(agentEvent);
     }
 
     // Check for session idle (turn complete)
     if (event.type === 'session.idle') {
-      this.signalTurnComplete();
+      this.eventQueue.complete();
     }
   }
 
-  /**
-   * Enqueue an event for the AsyncGenerator to yield.
-   */
-  private enqueueEvent(event: AgentEvent): void {
-    this.eventQueue.push(event);
-    // Wake up any waiting consumer
-    const resolver = this.eventResolvers.shift();
-    if (resolver) resolver(false);
-  }
-
-  /**
-   * Wait for the next event in the queue.
-   * Returns true if turn is complete and no more events.
-   */
-  private waitForEvent(): Promise<boolean> {
-    if (this.eventQueue.length > 0) return Promise.resolve(false);
-    if (this.turnComplete) return Promise.resolve(true);
-    return new Promise((resolve) => {
-      this.eventResolvers.push(resolve);
-    });
-  }
-
-  /**
-   * Signal that the turn is complete.
-   */
-  private signalTurnComplete(): void {
-    this.turnComplete = true;
-    // Wake up all waiting consumers
-    for (const resolver of this.eventResolvers) {
-      resolver(true);
-    }
-    this.eventResolvers = [];
-  }
+  // Event queue methods now provided by EventQueue class
 
   // ============================================================
   // Hooks
@@ -789,7 +735,7 @@ export class CopilotAgent extends BaseAgent {
               };
             }
             this.debug(`PreToolUse: Source "${sourceSlug}" activated successfully`);
-            this.enqueueEvent({
+            this.eventQueue.enqueue({
               type: 'source_activated' as const,
               sourceSlug,
               originalMessage: this.currentUserMessage,
@@ -833,6 +779,8 @@ export class CopilotAgent extends BaseAgent {
     const skillResult = qualifySkillName(
       pathResult.modified ? pathResult.input : inputObj,
       this.config.workspace.id,
+      this.config.workspace.rootPath,
+      this.config.session?.workingDirectory,
       (msg) => this.debug(msg)
     );
 
@@ -1124,12 +1072,11 @@ export class CopilotAgent extends BaseAgent {
         this.debug(`Abort failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    this.signalTurnComplete();
+    this.eventQueue.complete();
   }
 
   forceAbort(reason: AbortReason): void {
     this.abortReason = reason;
-    this.turnComplete = true;
     this._isProcessing = false;
 
     // Reject all pending permissions
@@ -1140,11 +1087,8 @@ export class CopilotAgent extends BaseAgent {
     }
     this.pendingPermissions.clear();
 
-    // Wake up all waiting consumers
-    for (const resolver of this.eventResolvers) {
-      resolver(true);
-    }
-    this.eventResolvers = [];
+    // Signal turn complete to wake up any waiting consumers
+    this.eventQueue.complete();
 
     // For PlanSubmitted and AuthRequest, just interrupt the turn - don't abort session
     // The user will respond (approve plan, complete auth) and we need to continue in the same session

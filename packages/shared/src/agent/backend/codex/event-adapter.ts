@@ -9,9 +9,9 @@
  */
 
 import type { AgentEvent, AgentEventUsage } from '@craft-agent/core/types';
-import { createLogger } from '../../../utils/debug.ts';
 
-import { parseReadCommand, type ReadCommandInfo } from './read-patterns';
+import { BaseEventAdapter } from '../base-event-adapter.ts';
+import type { ReadCommandInfo } from '../read-patterns.ts';
 
 /** Max chars for command/MCP tool output before truncation (~25K tokens, matches Claude SDK behavior) */
 const MAX_COMMAND_OUTPUT_CHARS = 100_000;
@@ -58,43 +58,39 @@ interface OutputDeltaNotification {
  * - item/completed → tool_result / text_complete (with turnId)
  * - turn/completed → complete with usage
  */
-export class EventAdapter {
-  private log = createLogger('codex-event');
-  private turnIndex: number = 0;
+export class CodexEventAdapter extends BaseEventAdapter {
   private itemIndex: number = 0;
 
-  // Track command output for tool results
-  private commandOutput: Map<string, string> = new Map();
+  // ── Sub-turnId isolation ──────────────────────────────────────────
+  // Same pattern as Copilot adapter. Reasoning and agentMessage events
+  // share currentTurnId within a turn. Without sub-turnIds the renderer's
+  // findAssistantMessage(turnId) returns the FIRST match, overwriting
+  // the reasoning message with the final response at the wrong position.
+  // Each text block gets its own sub-turnId via nextSubTurnId().
+  private subTurnCounter: number = 0;
+  private reasoningSubTurnId: string | null = null;
+  private messageSubTurnId: string | null = null;
+  private planUpdateCounter: number = 0;
 
-  // Track commands detected as file reads (for Read tool display)
-  private readCommands: Map<string, ReadCommandInfo> = new Map();
-
-  // Track block reasons for declined commands (set by PreToolUse handler)
-  private blockReasons: Map<string, string> = new Map();
-
-  // Current turn ID for event correlation
-  private currentTurnId: string | null = null;
-
-  /**
-   * Store the block reason for a command that will be declined.
-   * Called from codex-agent when PreToolUse blocks a command.
-   */
-  setBlockReason(itemId: string, reason: string): void {
-    this.log.warn('Command block reason recorded', { itemId, reason });
-    this.blockReasons.set(itemId, reason);
+  constructor() {
+    super('codex-event');
   }
 
   /**
-   * Start a new turn - resets item indexing and streaming state.
-   * @param turnId - The turn ID for event correlation
+   * Generate a unique sub-turnId for a text block within the current turn.
+   * Each call increments the counter, guaranteeing no two blocks share a turnId.
    */
-  startTurn(turnId?: string): void {
-    this.turnIndex++;
+  private nextSubTurnId(prefix: string): string {
+    const base = this.currentTurnId || 'unknown';
+    return `${base}__${prefix}${this.subTurnCounter++}`;
+  }
+
+  protected onTurnStart(): void {
     this.itemIndex = 0;
-    this.commandOutput.clear();
-    this.readCommands.clear();
-    this.blockReasons.clear();
-    this.currentTurnId = turnId || null;
+    this.subTurnCounter = 0;
+    this.reasoningSubTurnId = null;
+    this.messageSubTurnId = null;
+    this.planUpdateCounter = 0;
     this.log.debug('Turn started', { turnId: this.currentTurnId });
   }
 
@@ -126,7 +122,8 @@ export class EventAdapter {
 
   /**
    * Adapt turn/plan/updated notification.
-   * Converts Codex's native task list to todos_updated events for TurnCard display.
+   * Emits synthetic tool_start + tool_result for TodoWrite so the existing
+   * extractTodosFromActivities() in turn-utils picks up todos for TurnCard.
    */
   *adaptTurnPlanUpdated(notification: TurnPlanUpdatedNotification): Generator<AgentEvent> {
     // Guard against null/undefined plan
@@ -142,12 +139,16 @@ export class EventAdapter {
       activeForm: step.status === 'inProgress' ? step.step : undefined,
     }));
 
-    yield {
-      type: 'todos_updated',
-      todos,
-      turnId: notification.turnId,
-      explanation: notification.explanation,
-    } as AgentEvent;
+    const toolUseId = `plan-${this.currentTurnId || Date.now()}-${this.planUpdateCounter++}`;
+
+    yield this.createToolStart(
+      toolUseId, 'TodoWrite', { todos },
+      undefined, 'Update Plan',
+    );
+    yield this.createToolResult(
+      toolUseId, 'TodoWrite',
+      notification.explanation || 'Plan updated', false,
+    );
   }
 
   /**
@@ -164,7 +165,7 @@ export class EventAdapter {
         return status;
       default:
         // Log unexpected status for debugging, default to 'pending'
-        console.warn(`[EventAdapter] Unexpected plan status: ${status}, defaulting to 'pending'`);
+        console.warn(`[CodexEventAdapter] Unexpected plan status: ${status}, defaulting to 'pending'`);
         return 'pending';
     }
   }
@@ -190,10 +191,9 @@ export class EventAdapter {
             originalCommand: item.command,
           };
           this.readCommands.set(item.id, readInfo);
-          yield this.createToolStart(
+          yield this.createReadToolStart(
             item.id,
-            'Read',
-            { file_path: readAction.path, _command: item.command },
+            readInfo,
             item.description ?? undefined,
             item.displayName ?? 'Read File',
           );
@@ -201,20 +201,11 @@ export class EventAdapter {
         }
 
         // Fallback: Parse command ourselves for edge cases Codex doesn't classify
-        const parsedReadInfo = parseReadCommand(item.command);
+        const parsedReadInfo = this.classifyReadCommand(item.id, item.command);
         if (parsedReadInfo) {
-          this.readCommands.set(item.id, parsedReadInfo);
-          yield this.createToolStart(
+          yield this.createReadToolStart(
             item.id,
-            'Read',
-            {
-              file_path: parsedReadInfo.filePath,
-              offset: parsedReadInfo.startLine,
-              limit: parsedReadInfo.endLine
-                ? parsedReadInfo.endLine - (parsedReadInfo.startLine || 1) + 1
-                : undefined,
-              _command: parsedReadInfo.originalCommand,
-            },
+            parsedReadInfo,
             item.description ?? undefined,
             item.displayName ?? 'Read File',
           );
@@ -305,7 +296,7 @@ export class EventAdapter {
 
       default:
         // Log unknown types for debugging instead of silent drop
-        console.warn(`[EventAdapter] Unknown item type in started: ${(item as { type: string }).type}`);
+        console.warn(`[CodexEventAdapter] Unknown item type in started: ${(item as { type: string }).type}`);
         break;
     }
   }
@@ -316,10 +307,14 @@ export class EventAdapter {
   *adaptAgentMessageDelta(notification: AgentMessageDeltaNotification): Generator<AgentEvent> {
     const delta = notification.delta;
     if (delta) {
+      // Allocate sub-turnId on first delta of this message block
+      if (!this.messageSubTurnId) {
+        this.messageSubTurnId = this.nextSubTurnId('m');
+      }
       yield {
         type: 'text_delta',
         text: delta,
-        turnId: this.currentTurnId || undefined,
+        turnId: this.messageSubTurnId,
       };
     }
   }
@@ -331,13 +326,14 @@ export class EventAdapter {
   *adaptReasoningDelta(notification: OutputDeltaNotification): Generator<AgentEvent> {
     const { delta } = notification;
     if (delta) {
-      // Stream reasoning as intermediate text for real-time thinking visibility
-      // The UI should render these with appropriate styling (e.g., italics, collapsible)
+      // Allocate sub-turnId on first delta of this reasoning block
+      if (!this.reasoningSubTurnId) {
+        this.reasoningSubTurnId = this.nextSubTurnId('r');
+      }
       yield {
         type: 'text_delta',
         text: delta,
-        turnId: this.currentTurnId || undefined,
-        // Note: isIntermediate is set on text_complete, deltas are always partial
+        turnId: this.reasoningSubTurnId,
       };
     }
   }
@@ -393,25 +389,21 @@ export class EventAdapter {
         break;
 
       case 'imageView':
-        yield {
-          type: 'tool_result',
-          toolUseId: item.id,
-          toolName: 'ImageView',
-          result: `Viewed image: ${item.path}`,
-          isError: false,
-          turnId: this.currentTurnId || undefined,
-        };
+        yield this.createToolResult(
+          item.id,
+          'ImageView',
+          `Viewed image: ${item.path}`,
+          false,
+        );
         break;
 
       case 'collabAgentToolCall':
-        yield {
-          type: 'tool_result',
-          toolUseId: item.id,
-          toolName: `CollabAgent:${item.tool}`,
-          result: item.status === 'completed' ? 'Collaborative task completed' : `Status: ${item.status}`,
-          isError: item.status === 'failed',
-          turnId: this.currentTurnId || undefined,
-        };
+        yield this.createToolResult(
+          item.id,
+          `CollabAgent:${item.tool}`,
+          item.status === 'completed' ? 'Collaborative task completed' : `Status: ${item.status}`,
+          item.status === 'failed',
+        );
         break;
 
       case 'userMessage':
@@ -425,30 +417,9 @@ export class EventAdapter {
 
       default:
         // Log unknown types for debugging instead of silent drop
-        console.warn(`[EventAdapter] Unknown item type in completed: ${(item as { type: string }).type}`);
+        console.warn(`[CodexEventAdapter] Unknown item type in completed: ${(item as { type: string }).type}`);
         break;
     }
-  }
-
-  /**
-   * Create a tool_start event.
-   */
-  private createToolStart(
-    id: string,
-    toolName: string,
-    input: Record<string, unknown>,
-    intent?: string,
-    displayName?: string,
-  ): AgentEvent {
-    return {
-      type: 'tool_start',
-      toolName,
-      toolUseId: id,
-      input,
-      intent,
-      displayName,
-      turnId: this.currentTurnId || undefined,
-    };
   }
 
   /**
@@ -493,10 +464,7 @@ export class EventAdapter {
       : rawOutput;
 
     // Get stored block reason if available (set by PreToolUse handler)
-    const blockReason = this.blockReasons.get(item.id);
-    if (blockReason) {
-      this.blockReasons.delete(item.id); // Clean up
-    }
+    const blockReason = this.consumeBlockReason(item.id);
 
     if (isDeclined) {
       this.log.warn('Command declined by permission policy', {
@@ -520,27 +488,12 @@ export class EventAdapter {
     };
 
     // Check if this was detected as a file read
-    const readInfo = this.readCommands.get(item.id);
+    const readInfo = this.consumeReadCommand(item.id);
     if (readInfo) {
-      this.readCommands.delete(item.id);
-      return {
-        type: 'tool_result',
-        toolUseId: item.id,
-        toolName: 'Read',
-        result: getResultMessage(true),
-        isError,
-        turnId: this.currentTurnId || undefined,
-      };
+      return this.createToolResult(item.id, 'Read', getResultMessage(true), isError);
     }
 
-    return {
-      type: 'tool_result',
-      toolUseId: item.id,
-      toolName: 'Bash',
-      result: getResultMessage(false),
-      isError,
-      turnId: this.currentTurnId || undefined,
-    };
+    return this.createToolResult(item.id, 'Bash', getResultMessage(false), isError);
   }
 
   /**
@@ -550,14 +503,12 @@ export class EventAdapter {
     const isError = item.status === 'failed';
     const summary = item.changes.map((c: FileUpdateChange) => `${c.kind.type}: ${c.path}`).join('\n');
 
-    return {
-      type: 'tool_result',
-      toolUseId: item.id,
-      toolName: 'Edit',
-      result: isError ? `Patch failed:\n${summary}` : `Applied:\n${summary}`,
+    return this.createToolResult(
+      item.id,
+      'Edit',
+      isError ? `Patch failed:\n${summary}` : `Applied:\n${summary}`,
       isError,
-      turnId: this.currentTurnId || undefined,
-    };
+    );
   }
 
   /**
@@ -582,14 +533,12 @@ export class EventAdapter {
       result = 'Success';
     }
 
-    return {
-      type: 'tool_result',
-      toolUseId: item.id,
-      toolName: `mcp__${item.server}__${item.tool}`,
+    return this.createToolResult(
+      item.id,
+      `mcp__${item.server}__${item.tool}`,
       result,
       isError,
-      turnId: this.currentTurnId || undefined,
-    };
+    );
   }
 
   /**
@@ -602,24 +551,20 @@ export class EventAdapter {
     // TODO: Extract actual results when Codex provides them in the item
     const result = `Web search completed for: "${item.query}"`;
 
-    return {
-      type: 'tool_result',
-      toolUseId: item.id,
-      toolName: 'WebSearch',
-      result,
-      isError: false,
-      turnId: this.currentTurnId || undefined,
-    };
+    return this.createToolResult(item.id, 'WebSearch', result, false);
   }
 
   /**
    * Create text_complete event for agent message.
    */
   private createTextCompleteEvent(item: ThreadItem & { type: 'agentMessage' }): AgentEvent {
+    // Use sub-turnId from message deltas if we streamed, otherwise allocate fresh
+    const mTurnId = this.messageSubTurnId || this.nextSubTurnId('m');
+    this.messageSubTurnId = null; // Reset for next message block
     return {
       type: 'text_complete',
       text: item.text,
-      turnId: this.currentTurnId || undefined,
+      turnId: mTurnId,
     };
   }
 
@@ -629,11 +574,14 @@ export class EventAdapter {
   private createReasoningEvent(item: ThreadItem & { type: 'reasoning' }): AgentEvent {
     // v2 reasoning has summary array instead of single text
     const text = item.summary?.join('\n') || item.content?.join('\n') || '';
+    // Use sub-turnId from reasoning deltas if we streamed, otherwise allocate fresh
+    const rTurnId = this.reasoningSubTurnId || this.nextSubTurnId('r');
+    this.reasoningSubTurnId = null; // Reset for next reasoning block
     return {
       type: 'text_complete',
       text,
       isIntermediate: true,
-      turnId: this.currentTurnId || undefined,
+      turnId: rTurnId,
     };
   }
 

@@ -62,8 +62,17 @@ export {
   providerTypeToAgentProvider,
 } from './factory.ts';
 
+// Shared infrastructure
+export { BaseEventAdapter } from './base-event-adapter.ts';
+export { EventQueue } from './event-queue.ts';
+
+// Provider-specific event adapters
+export { ClaudeEventAdapter } from './claude/event-adapter.ts';
+export { CodexEventAdapter } from './codex/event-adapter.ts';
+export { CopilotEventAdapter } from './copilot/event-adapter.ts';
+
 // Agent implementations
-// Both agents implement AgentBackend directly
+// All agents implement AgentBackend directly
 export { ClaudeAgent } from '../claude-agent.ts';
 export { CodexAgent, CodexBackend } from '../codex-agent.ts';
 export { CopilotAgent, CopilotBackend } from '../copilot-agent.ts';

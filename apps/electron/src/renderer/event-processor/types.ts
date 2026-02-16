@@ -5,7 +5,7 @@
  * All agent events flow through a single pure function for consistent state transitions.
  */
 
-import type { Session, Message, PermissionRequest, CredentialRequest, TypedError, PermissionMode, TodoState, AuthRequest, ToolDisplayMeta } from '../../shared/types'
+import type { Session, Message, PermissionRequest, CredentialRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta } from '../../shared/types'
 
 /**
  * Streaming state for a session - replaces streamingTextRef
@@ -44,6 +44,8 @@ export interface TextCompleteEvent {
   turnId?: string
   isIntermediate?: boolean
   parentToolUseId?: string
+  /** Timestamp from main process for consistent ordering with session.jsonl */
+  timestamp?: number
 }
 
 /**
@@ -78,6 +80,8 @@ export interface ToolResultEvent {
   isError?: boolean
   turnId?: string
   parentToolUseId?: string
+  /** Timestamp from main process for consistent ordering */
+  timestamp?: number
 }
 
 /**
@@ -102,6 +106,8 @@ export interface ErrorEvent {
   title?: string
   details?: string
   original?: string
+  /** Timestamp from main process for consistent ordering */
+  timestamp?: number
 }
 
 /**
@@ -135,10 +141,10 @@ export interface LabelsChangedEvent {
 /**
  * Todo state changed event (external metadata change or agent tool)
  */
-export interface TodoStateChangedEvent {
-  type: 'todo_state_changed'
+export interface SessionStatusChangedEvent {
+  type: 'session_status_changed'
   sessionId: string
-  todoState?: string
+  sessionStatus?: string
 }
 
 /**
@@ -192,6 +198,8 @@ export interface TypedErrorEvent {
   type: 'typed_error'
   sessionId: string
   error: TypedError
+  /** Timestamp from main process for consistent ordering */
+  timestamp?: number
 }
 
 /**
@@ -202,6 +210,8 @@ export interface StatusEvent {
   sessionId: string
   message: string
   statusType?: 'compacting'
+  /** Timestamp from main process for consistent ordering */
+  timestamp?: number
 }
 
 /**
@@ -213,6 +223,8 @@ export interface InfoEvent {
   message: string
   statusType?: 'compaction_complete'
   level?: 'info' | 'warning' | 'error' | 'success'
+  /** Timestamp from main process for consistent ordering */
+  timestamp?: number
 }
 
 /**
@@ -424,22 +436,6 @@ export interface UsageUpdateEvent {
 }
 
 /**
- * Codex turn/plan/updated notification - task list updates
- * Synthesized into TodoWrite tool messages for TurnCard display
- */
-export interface TodosUpdatedEvent {
-  type: 'todos_updated'
-  sessionId: string
-  todos: Array<{
-    content: string
-    status: 'pending' | 'in_progress' | 'completed'
-    activeForm?: string
-  }>
-  turnId?: string
-  explanation?: string | null
-}
-
-/**
  * Union of all agent events
  */
 export type AgentEvent =
@@ -454,7 +450,7 @@ export type AgentEvent =
   | CredentialRequestEvent
   | SourcesChangedEvent
   | LabelsChangedEvent
-  | TodoStateChangedEvent
+  | SessionStatusChangedEvent
   | SessionFlaggedEvent
   | SessionUnflaggedEvent
   | SessionArchivedEvent
@@ -482,7 +478,6 @@ export type AgentEvent =
   | SourceActivatedEvent
   | SessionResetToMessageEvent
   | UsageUpdateEvent
-  | TodosUpdatedEvent
 
 /**
  * Side effects that need to be handled outside the pure processor

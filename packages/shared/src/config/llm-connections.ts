@@ -155,36 +155,61 @@ export interface LlmConnectionWithStatus extends LlmConnection {
 
 /**
  * Get the mini/utility model ID for a connection.
- * Convention: last model in connection.models = mini model.
- * Used for mini agent (Codex).
+ * Provider-aware search:
+ *   - Anthropic (incl. bedrock/vertex): find any model with "haiku" in its id/name
+ *   - OpenAI: find any model with "mini" in its id/name
+ *   - Otherwise: last model in the list
  *
- * Same logic as getSummarizationModel() for now, but separate
- * so mini agent and summarization models can diverge independently.
+ * Used for mini agent, title generation, and mini completions.
  *
- * @param connection - LLM connection (or partial with models array)
+ * @param connection - LLM connection (or partial with models + providerType)
  * @returns Model ID string, or undefined if no models available
  */
-export function getMiniModel(connection: Pick<LlmConnection, 'models'>): string | undefined {
-  if (!connection.models || connection.models.length === 0) return undefined;
-  const last = connection.models[connection.models.length - 1];
-  return last == null ? undefined : typeof last === 'string' ? last : last.id;
+export function getMiniModel(connection: Pick<LlmConnection, 'models' | 'providerType'>): string | undefined {
+  return findSmallModel(connection);
 }
 
 /**
  * Get the summarization model ID for a connection.
- * Convention: last model in connection.models = summarization model.
- * Used for response summarization, title generation, and API tool summarization.
- *
- * Same logic as getMiniModel() for now, but separate
+ * Same provider-aware logic as getMiniModel(), but separate
  * so summarization and mini agent models can diverge independently.
  *
- * @param connection - LLM connection (or partial with models array)
+ * Used for response summarization and API tool summarization.
+ *
+ * @param connection - LLM connection (or partial with models + providerType)
  * @returns Model ID string, or undefined if no models available
  */
-export function getSummarizationModel(connection: Pick<LlmConnection, 'models'>): string | undefined {
+export function getSummarizationModel(connection: Pick<LlmConnection, 'models' | 'providerType'>): string | undefined {
+  return findSmallModel(connection);
+}
+
+/**
+ * Provider-aware small model resolution.
+ * Shared implementation for getMiniModel() and getSummarizationModel().
+ *
+ *   - Anthropic (incl. bedrock/vertex/compat): find "haiku"
+ *   - OpenAI (incl. compat): find "mini"
+ *   - Otherwise: last model in the list
+ */
+function findSmallModel(connection: Pick<LlmConnection, 'models' | 'providerType'>): string | undefined {
   if (!connection.models || connection.models.length === 0) return undefined;
-  const last = connection.models[connection.models.length - 1];
-  return last == null ? undefined : typeof last === 'string' ? last : last.id;
+
+  const toId = (m: ModelDefinition | string) => typeof m === 'string' ? m : m.id;
+  const toSearchStr = (m: ModelDefinition | string) =>
+    typeof m === 'string' ? m.toLowerCase() : `${m.id} ${m.name} ${m.shortName}`.toLowerCase();
+
+  // Provider-aware keyword search
+  const keyword = isAnthropicProvider(connection.providerType) ? 'haiku'
+    : isOpenAIProvider(connection.providerType) ? 'mini'
+    : undefined;
+
+  if (keyword) {
+    const match = connection.models.find(m => toSearchStr(m).includes(keyword));
+    if (match) return toId(match);
+  }
+
+  // Fallback: last model in the list
+  return toId(connection.models[connection.models.length - 1]!);
 }
 
 /**
@@ -332,7 +357,7 @@ export function getModelsForProviderType(providerType: LlmProviderType): ModelDe
     return [];
   }
 
-  // Standard providers use registry models
+  // OpenAI: registry models as fallback; dynamic models fetched via model/list at runtime
   if (providerType === 'openai') {
     return OPENAI_MODELS;
   }

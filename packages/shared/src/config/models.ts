@@ -86,8 +86,12 @@ export const MODEL_REGISTRY: ModelDefinition[] = [
   },
 
   // ----------------------------------------
-  // OpenAI Codex Models (via ChatGPT Plus)
-  // Model IDs match actual OpenAI model slugs
+  // OpenAI Codex Models — FALLBACK entries only.
+  // At runtime, models are discovered dynamically via model/list from the Codex app-server.
+  // See fetchAndStoreCodexModels() in ipc.ts. These entries are used when:
+  //   - App-server is not running (e.g., first launch before auth)
+  //   - model/list call fails (network, timeout)
+  //   - Offline mode
   // ----------------------------------------
   {
     id: 'gpt-5.3-codex',

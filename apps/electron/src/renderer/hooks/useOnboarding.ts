@@ -34,6 +34,10 @@ interface UseOnboardingOptions {
   /** Called immediately after config is saved to disk (before wizard closes).
    *  Use this to propagate billing/model changes to the UI without waiting for onComplete. */
   onConfigSaved?: () => void
+  /** Slug of existing connection being edited (null = creating new) */
+  editingSlug?: string | null
+  /** Set of slugs already in use (for generating unique slugs when creating new) */
+  existingSlugs?: Set<string>
 }
 
 interface UseOnboardingReturn {
@@ -73,15 +77,49 @@ interface UseOnboardingReturn {
   reset: () => void
 }
 
+// Base slug for each setup method (used as template key in ipc.ts)
+const BASE_SLUG_FOR_METHOD: Record<ApiSetupMethod, string> = {
+  anthropic_api_key: 'anthropic-api',
+  claude_oauth: 'claude-max',
+  chatgpt_oauth: 'codex',
+  openai_api_key: 'codex-api',
+  copilot_oauth: 'copilot',
+}
+
+/**
+ * Generate a unique slug for a new connection.
+ * If the base slug is taken, appends -2, -3, etc.
+ * When editingSlug is provided, reuses that slug (editing existing connection).
+ */
+function resolveSlugForMethod(
+  method: ApiSetupMethod,
+  editingSlug: string | null,
+  existingSlugs: Set<string>,
+): string {
+  // Editing an existing connection — reuse its slug
+  if (editingSlug) return editingSlug
+
+  const base = BASE_SLUG_FOR_METHOD[method]
+  if (!existingSlugs.has(base)) return base
+
+  let i = 2
+  while (existingSlugs.has(`${base}-${i}`)) i++
+  return `${base}-${i}`
+}
+
 // Map ApiSetupMethod to LlmConnectionSetup for the new unified connection system
 function apiSetupMethodToConnectionSetup(
   method: ApiSetupMethod,
-  options: { credential?: string; baseUrl?: string; connectionDefaultModel?: string; models?: string[] }
+  options: { credential?: string; baseUrl?: string; connectionDefaultModel?: string; models?: string[] },
+  editingSlug: string | null,
+  existingSlugs: Set<string>,
 ): LlmConnectionSetup {
+  const slug = resolveSlugForMethod(method, editingSlug, existingSlugs)
+
   switch (method) {
     case 'anthropic_api_key':
       return {
-        slug: 'anthropic-api',
+        slug,
         credential: options.credential,
         baseUrl: options.baseUrl,
         defaultModel: options.connectionDefaultModel,
@@ -89,17 +127,17 @@ function apiSetupMethodToConnectionSetup(
       }
     case 'claude_oauth':
       return {
-        slug: 'claude-max',
+        slug,
         credential: options.credential,
       }
     case 'chatgpt_oauth':
       return {
-        slug: 'codex',
+        slug,
         credential: options.credential,
       }
     case 'openai_api_key':
       return {
-        slug: 'codex-api',
+        slug,
         credential: options.credential,
         baseUrl: options.baseUrl,
         defaultModel: options.connectionDefaultModel,
@@ -107,7 +145,7 @@ function apiSetupMethodToConnectionSetup(
       }
     case 'copilot_oauth':
       return {
-        slug: 'copilot',
+        slug,
         credential: options.credential,
       }
   }
@@ -120,6 +158,8 @@ export function useOnboarding({
   initialApiSetupMethod,
   onDismiss,
   onConfigSaved,
+  editingSlug = null,
+  existingSlugs = new Set(),
 }: UseOnboardingOptions): UseOnboardingReturn {
   // Main wizard state
   const [state, setState] = useState<OnboardingState>({
@@ -164,7 +204,7 @@ export function useOnboarding({
         baseUrl: options?.baseUrl,
         connectionDefaultModel: options?.connectionDefaultModel,
         models: options?.models,
-      })
+      }, editingSlug, existingSlugs)
       // Use new unified API
       const result = await window.electronAPI.setupLlmConnection(setup)
 
@@ -187,7 +227,7 @@ export function useOnboarding({
         errorMessage: error instanceof Error ? error.message : 'Failed to save configuration',
       }))
     }
-  }, [state.apiSetupMethod, onConfigSaved])
+  }, [state.apiSetupMethod, onConfigSaved, editingSlug, existingSlugs])
 
   // Continue to next step
   const handleContinue = useCallback(async () => {
@@ -362,7 +402,7 @@ export function useOnboarding({
     try {
       // ChatGPT OAuth (single-step flow - opens browser, captures tokens automatically)
       if (effectiveMethod === 'chatgpt_oauth') {
-        const connectionSlug = apiSetupMethodToConnectionSetup(effectiveMethod, {}).slug
+        const connectionSlug = apiSetupMethodToConnectionSetup(effectiveMethod, {}, editingSlug, existingSlugs).slug
         const result = await window.electronAPI.startChatGptOAuth(connectionSlug)
 
         if (result.success) {
@@ -385,7 +425,7 @@ export function useOnboarding({
 
       // Copilot OAuth (device flow — polls for token after user enters code on GitHub)
       if (effectiveMethod === 'copilot_oauth') {
-        const connectionSlug = apiSetupMethodToConnectionSetup(effectiveMethod, {}).slug
+        const connectionSlug = apiSetupMethodToConnectionSetup(effectiveMethod, {}, editingSlug, existingSlugs).slug
 
         // Subscribe to device code event before starting the flow
         const cleanup = window.electronAPI.onCopilotDeviceCode((data) => {
@@ -447,7 +487,7 @@ export function useOnboarding({
         errorMessage: error instanceof Error ? error.message : 'OAuth failed',
       }))
     }
-  }, [state.apiSetupMethod, handleSaveConfig])
+  }, [state.apiSetupMethod, handleSaveConfig, editingSlug, existingSlugs])
 
   // Submit authorization code (second step of OAuth flow)
   const handleSubmitAuthCode = useCallback(async (code: string) => {
@@ -464,7 +504,7 @@ export function useOnboarding({
 
     try {
       // claude_oauth is the only method that uses the code exchange flow
-      const connectionSlug = apiSetupMethodToConnectionSetup('claude_oauth', {}).slug
+      const connectionSlug = apiSetupMethodToConnectionSetup('claude_oauth', {}, editingSlug, existingSlugs).slug
       const result = await window.electronAPI.exchangeClaudeCode(code.trim(), connectionSlug)
 
       if (result.success && result.token) {
@@ -490,7 +530,7 @@ export function useOnboarding({
         errorMessage: error instanceof Error ? error.message : 'Failed to exchange code',
       }))
     }
-  }, [handleSaveConfig])
+  }, [handleSaveConfig, editingSlug, existingSlugs])
 
   // Cancel OAuth flow
   const handleCancelOAuth = useCallback(async () => {

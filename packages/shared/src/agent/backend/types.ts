@@ -413,4 +413,12 @@ export interface BackendConfig {
 
   /** Workspace-level hook system for user-defined SDK hooks (hooks.json) */
   hookSystem?: HookSystem;
+
+  /**
+   * Per-session environment variable overrides for the SDK subprocess.
+   * Spread after process.env in getDefaultOptions() so they take precedence.
+   * Used to pass connection-specific config (e.g., ANTHROPIC_BASE_URL) that
+   * would otherwise be clobbered by concurrent sessions mutating process.env.
+   */
+  envOverrides?: Record<string, string>;
 }

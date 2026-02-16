@@ -24,6 +24,7 @@ files:
   # Include network interceptor for API error capture and MCP schema injection
   - packages/shared/src/network-interceptor.ts
   - packages/shared/src/interceptor-common.ts
+  - packages/shared/src/feature-flags.ts
   # Include bundled Bun runtime (platform-specific, set by build script)
   - vendor/bun/**/*
   # Include bundled Codex binary (platform-specific, downloaded by build script)

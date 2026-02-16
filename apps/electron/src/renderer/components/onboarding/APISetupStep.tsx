@@ -33,8 +33,14 @@ const SEGMENT_DESCRIPTIONS: Record<ProviderSegment, React.ReactNode> = {
  * - 'anthropic_api_key' → anthropic + api_key
  * - 'chatgpt_oauth' → openai + oauth
  * - 'openai_api_key' → openai + api_key
+ * - 'copilot_oauth' → copilot + oauth
  */
-export type ApiSetupMethod = 'anthropic_api_key' | 'claude_oauth' | 'chatgpt_oauth' | 'openai_api_key' | 'copilot_oauth'
+export type ApiSetupMethod =
+  | 'anthropic_api_key'
+  | 'claude_oauth'
+  | 'chatgpt_oauth'
+  | 'openai_api_key'
+  | 'copilot_oauth'
 
 /**
  * Map ApiSetupMethod to the underlying LLM connection types.

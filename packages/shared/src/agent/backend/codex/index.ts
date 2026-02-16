@@ -10,4 +10,4 @@
 
 // Re-export CodexAgent from its new location
 export { CodexAgent, CodexBackend } from '../../codex-agent.ts';
-export { EventAdapter } from './event-adapter.ts';
+export { CodexEventAdapter } from './event-adapter.ts';

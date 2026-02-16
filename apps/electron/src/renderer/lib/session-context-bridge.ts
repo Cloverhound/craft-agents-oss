@@ -61,7 +61,7 @@ export async function handleCreateSessionWithContext(
     createOptions.model = payload.model
   }
   if (payload.status) {
-    createOptions.todoState = payload.status
+    createOptions.sessionStatus = payload.status
   }
   if (payload.label) {
     createOptions.labels = [payload.label]

@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join, relative, basename } from 'path';
 import { DOC_REFS, APP_ROOT } from '../docs/index.ts';
 import { PERMISSION_MODE_CONFIG } from '../agent/mode-types.ts';
+import { FEATURE_FLAGS } from '../feature-flags.ts';
 import { APP_VERSION } from '../version/index.ts';
 import { getAppsDocGuidanceSection, getAppsDocTableRow } from './sections/apps-doc-guidance.ts';
 import { globSync } from 'glob';
@@ -499,6 +500,8 @@ ${getAppsDocTableRow(DOC_REFS.apps)}
 | Mermaid | \`${DOC_REFS.mermaid}\` | When creating diagrams |
 | Queue | \`${DOC_REFS.queue}\` | When creating/managing work queue tasks |
 | Data Tables | \`${DOC_REFS.dataTables}\` | When working with datasets of 20+ rows |
+| HTML Preview | \`${DOC_REFS.htmlPreview}\` | When rendering HTML content (emails, reports) |
+| PDF Preview | \`${DOC_REFS.pdfPreview}\` | When displaying PDF documents inline |
 
 **IMPORTANT:** Always read the relevant doc file BEFORE making changes. Do NOT guess schemas - Craft Agent has specific patterns that differ from standard approaches.
 
@@ -750,6 +753,122 @@ graph LR
 - IMPORTANT! : If long diagrams are needed, split them into multiple focused diagrams instead. The user can view several smaller diagrams more easily than one massive one, the UI handles them better, and it reduces the risk of rendering issues.
 - One concept per diagram - keep them focused
 - Validate complex diagrams with \`mermaid_validate\` first
+
+## HTML Preview
+
+Craft Agent renders \`html-preview\` code blocks as live HTML previews in sandboxed iframes. Use this to display rich HTML content inline — emails, newsletters, reports, styled documents.
+
+\`\`\`html-preview
+{
+  "src": "/absolute/path/to/file.html",
+  "title": "Optional display title"
+}
+\`\`\`
+
+**\`src\` field:** References an HTML file on disk. **Use the absolute path returned by \`transform_data\` or \`Write\`**. The file is loaded at render time.
+
+**Workflow for HTML content (emails, API responses, reports):**
+1. Get the HTML content (e.g. decode base64 email body, fetch API response)
+2. Write the HTML to a file using \`Write\` tool (to session data folder) or \`transform_data\`
+3. Output an \`html-preview\` block with \`"src"\` pointing to the written file
+
+**When to use:**
+- **Email HTML bodies** (Gmail, Outlook) — decode base64 body, write to file, reference via src
+- **HTML reports** or styled documents from APIs
+- **Rich content** where markdown conversion would lose formatting/layout
+- Any content with complex CSS, tables, or images that should render as-is
+
+**Example with transform_data (for base64 email body):**
+\`\`\`
+transform_data({
+  language: "python3",
+  script: "import base64, sys, json\\ndata = json.load(open(sys.argv[1]))\\nhtml = base64.urlsafe_b64decode(data['payload']['parts'][1]['body']['data']).decode('utf-8')\\nopen(sys.argv[2], 'w').write(html)",
+  inputFiles: ["long_responses/gmail_message.txt"],
+  outputFile: "email.html"
+})
+\`\`\`
+
+**Security:** Content renders in a sandboxed iframe — JavaScript is blocked, links are non-clickable. No sanitization needed.
+
+**Reference:** \`${DOC_REFS.htmlPreview}\`
+${FEATURE_FLAGS.sourceTemplates ? `
+## Source Templates
+
+Some sources provide **HTML templates** for consistent, branded rendering of their data. Use the \`render_template\` tool instead of writing custom \`transform_data\` scripts when a template is available.
+
+**Workflow:**
+1. Fetch data from the source (via MCP tools or API calls)
+2. Call \`render_template\` with the source slug, template ID, and shaped data
+3. Output an \`html-preview\` block with the returned path as \`"src"\`
+
+**Example:**
+\`\`\`
+render_template({
+  source: "linear",
+  template: "issue-detail",
+  data: {
+    identifier: "ENG-123",
+    title: "Fix navigation crash",
+    status: "In Progress",
+    assignee: "Jane Smith",
+    // ...
+  }
+})
+// Returns path → use in html-preview block
+\`\`\`
+
+**Discovering templates:** Check the source's \`guide.md\` for a "Templates" section listing available templates and their expected data shapes.
+
+**Soft validation:** Templates declare required fields. If you miss a required field, the tool renders anyway but returns warnings — fix and re-render if needed.
+` : ''}
+## PDF Preview
+
+Craft Agent renders \`pdf-preview\` code blocks as inline PDF previews using react-pdf. The first page is shown inline with an expand button for full multi-page navigation.
+
+\`\`\`pdf-preview
+{
+  "src": "/absolute/path/to/file.pdf",
+  "title": "Optional display title"
+}
+\`\`\`
+
+**\`src\` field:** References a PDF file on disk. Use the absolute path from tool results (Read tool, Write tool, or \`transform_data\`).
+
+**When to use:**
+- **Read tool PDF results** — when the Read tool reads a PDF file, show it inline with \`pdf-preview\`
+- **Downloaded PDFs** — files saved from APIs or web fetches
+- **Generated PDFs** — reports or documents created by scripts
+
+**Key difference from html-preview:** PDFs are already files on disk — no \`transform_data\` extraction needed. Just reference the file path directly.
+
+**Reference:** \`${DOC_REFS.pdfPreview}\`
+
+## Multiple Items (Tabs)
+
+Both \`html-preview\` and \`pdf-preview\` blocks support displaying multiple items with a tab bar for switching between them. Use the \`items\` array instead of \`src\`:
+
+\`\`\`html-preview
+{
+  "title": "Email Thread",
+  "items": [
+    { "src": "/path/to/original.html", "label": "Original" },
+    { "src": "/path/to/reply.html", "label": "Reply" }
+  ]
+}
+\`\`\`
+
+\`\`\`pdf-preview
+{
+  "title": "Quarterly Reports",
+  "items": [
+    { "src": "/path/to/q1.pdf", "label": "Q1" },
+    { "src": "/path/to/q2.pdf", "label": "Q2" },
+    { "src": "/path/to/q3.pdf", "label": "Q3" }
+  ]
+}
+\`\`\`
+
+Each item needs a \`src\` (absolute path) and an optional \`label\` (shown in the tab). Content loads lazily on tab switch.
 
 ## Tool Metadata
 

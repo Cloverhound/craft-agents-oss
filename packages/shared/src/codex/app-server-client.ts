@@ -71,6 +71,10 @@ import type {
   TerminalInteractionNotification,
   ConfigWarningNotification,
   WindowsWorldWritableWarningNotification,
+  // Model discovery
+  ModelListParams,
+  ModelListResponse,
+  Model,
 } from '@craft-agent/codex-types/v2';
 
 // ============================================================
@@ -670,6 +674,25 @@ export class AppServerClient extends EventEmitter {
    */
   async accountLogout(): Promise<void> {
     return this.request<void>('account/logout', undefined);
+  }
+
+  /**
+   * List available models from the app-server.
+   * Fetches the full list with automatic pagination.
+   * Results depend on the current auth state (ChatGPT Pro sees more models than API key users).
+   */
+  async modelList(): Promise<Model[]> {
+    const allModels: Model[] = [];
+    let cursor: string | null = null;
+
+    do {
+      const params: ModelListParams = { cursor, limit: null };
+      const response = await this.request<ModelListResponse>('model/list', params);
+      allModels.push(...response.data);
+      cursor = response.nextCursor;
+    } while (cursor);
+
+    return allModels;
   }
 
   /**

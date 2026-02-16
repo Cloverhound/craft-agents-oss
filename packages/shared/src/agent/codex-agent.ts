@@ -31,7 +31,7 @@ import { AbortReason } from './backend/types.ts';
 import type { Workspace } from '../config/storage.ts';
 
 // Import models from centralized registry
-import { DEFAULT_CODEX_MODEL, getModelById, getModelIdByShortName, isCodexModel } from '../config/models.ts';
+import { DEFAULT_CODEX_MODEL, getModelById, getModelIdByShortName } from '../config/models.ts';
 
 // BaseAgent provides common functionality
 import { BaseAgent } from './base-agent.ts';
@@ -59,7 +59,8 @@ import { getCredentialManager } from '../credentials/index.ts';
 
 
 // Event adapter
-import { EventAdapter } from './backend/codex/event-adapter.ts';
+import { CodexEventAdapter } from './backend/codex/event-adapter.ts';
+import { EventQueue } from './backend/event-queue.ts';
 
 // Error parsing for typed errors
 import { parseError, type AgentError } from './errors.ts';
@@ -109,32 +110,26 @@ import type {
 // Models and DEFAULT_CODEX_MODEL imported from centralized registry (config/models.ts)
 
 /**
- * Resolve Codex model IDs to the correct versioned slug for the auth type.
+ * Resolve Codex model IDs to the correct versioned slug.
  *
- * The registry uses real OpenAI model slugs (gpt-5.3-codex, gpt-5.1-codex-mini).
- * This function handles:
- * - API key downgrade: gpt-5.3-codex → gpt-5.2-codex (5.3 is ChatGPT-sub-only)
+ * With dynamic model discovery (model/list), the app-server returns only models
+ * appropriate for the current auth type. Manual API-key downgrades are no longer needed.
+ *
+ * This function still handles:
  * - Backward compat: old abstract IDs (codex, codex-mini) from existing sessions
  */
-function resolveCodexModelId(modelId: string, authType?: string): string {
-  const isApiKey = authType === 'api_key' || authType === 'api_key_with_endpoint';
-
+function resolveCodexModelId(modelId: string, _authType?: string): string {
   // Registry-based model IDs (derived, not hardcoded)
   const codexModelId = getModelIdByShortName('Codex');
   const codexMiniModelId = getModelIdByShortName('Codex Mini');
 
   // Backward compat: map old abstract IDs to real registry slugs
-  const legacyMap: Record<string, { api: string; sub: string }> = {
-    'codex':      { api: 'gpt-5.2-codex', sub: codexModelId },  // API-only: 5.2 (not in registry)
-    'codex-mini': { api: codexMiniModelId, sub: codexMiniModelId },
+  const legacyMap: Record<string, string> = {
+    'codex': codexModelId,
+    'codex-mini': codexMiniModelId,
   };
   const legacy = legacyMap[modelId];
-  if (legacy) return isApiKey ? legacy.api : legacy.sub;
-
-  // API key users: downgrade subscription-only model to API-available version
-  if (isApiKey && modelId === codexModelId) {
-    return 'gpt-5.2-codex';  // 5.3 requires ChatGPT subscription, 5.2 available via API
-  }
+  if (legacy) return legacy;
 
   return modelId;
 }
@@ -189,12 +184,10 @@ export class CodexAgent extends BaseAgent {
   private currentTurnId: string | null = null;
 
   // Event adapter
-  private adapter: EventAdapter;
+  private adapter: CodexEventAdapter;
 
   // Event queue for streaming (AsyncGenerator pattern)
-  private eventQueue: AgentEvent[] = [];
-  private eventResolvers: Array<(done: boolean) => void> = [];
-  private turnComplete: boolean = false;
+  private eventQueue = new EventQueue();
 
   // Pending approval requests (legacy approval handlers)
   private pendingApprovals: Map<string, {
@@ -275,7 +268,7 @@ export class CodexAgent extends BaseAgent {
     this.codexThreadId = config.session?.sdkSessionId || null;
 
     // Initialize event adapter
-    this.adapter = new EventAdapter();
+    this.adapter = new CodexEventAdapter();
 
     // Start config watcher for hot-reloading source changes (non-headless only)
     if (!config.isHeadless) {
@@ -425,31 +418,30 @@ export class CodexAgent extends BaseAgent {
     this.client.on('turn/started', (notification) => {
       this.currentTurnId = notification.turn?.id || null;
       for (const event of this.adapter.adaptTurnStarted(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
     // Turn completed
     this.client.on('turn/completed', (notification) => {
       for (const event of this.adapter.adaptTurnCompleted(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
-      this.turnComplete = true;
-      this.signalEventAvailable(true);
+      this.eventQueue.complete();
     });
 
     // Turn plan updated - Codex's native task list
-    // Emits todos_updated events for TurnCard to display progress
+    // Emits synthetic TodoWrite tool events (tool_start + tool_result) for TurnCard
     this.client.on('turn/plan/updated', (notification) => {
       for (const event of this.adapter.adaptTurnPlanUpdated(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
     // Item started
     this.client.on('item/started', (notification) => {
       for (const event of this.adapter.adaptItemStarted(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
@@ -484,7 +476,7 @@ export class CodexAgent extends BaseAgent {
                 this.debug(`Source "${sourceSlug}" activated successfully`);
 
                 // Emit source_activated event for UI to auto-retry
-                this.enqueueEvent({
+                this.eventQueue.enqueue({
                   type: 'source_activated' as const,
                   sourceSlug,
                   originalMessage: this.currentUserMessage,
@@ -497,21 +489,21 @@ export class CodexAgent extends BaseAgent {
             }
           }
         }
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
     // Agent message delta (streaming text)
     this.client.on('item/agentMessage/delta', (notification) => {
       for (const event of this.adapter.adaptAgentMessageDelta(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
     // Reasoning delta (streaming thinking)
     this.client.on('item/reasoning/textDelta', (notification) => {
       for (const event of this.adapter.adaptReasoningDelta(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
@@ -542,10 +534,10 @@ export class CodexAgent extends BaseAgent {
       const typedError = this.parseCodexError(err);
       if (typedError && typedError.code !== 'unknown_error') {
         // Known error type - emit typed error with recovery actions
-        this.enqueueEvent({ type: 'typed_error', error: typedError });
+        this.eventQueue.enqueue({ type: 'typed_error', error: typedError });
       } else {
         // Unknown error - emit raw error message
-        this.enqueueEvent({ type: 'error', message: err.message });
+        this.eventQueue.enqueue({ type: 'error', message: err.message });
       }
     });
 
@@ -563,9 +555,8 @@ export class CodexAgent extends BaseAgent {
       this.pendingApprovals.clear();
 
       if (this._isProcessing) {
-        this.enqueueEvent({ type: 'error', message: 'Connection to Codex lost' });
-        this.turnComplete = true;
-        this.signalEventAvailable(true);
+        this.eventQueue.enqueue({ type: 'error', message: 'Connection to Codex lost' });
+        this.eventQueue.complete();
       }
     });
 
@@ -595,7 +586,7 @@ export class CodexAgent extends BaseAgent {
       if (usage) {
         // Use latest-turn usage for context size; include cached tokens to match OpenAI convention
         const inputTokens = usage.last.inputTokens + usage.last.cachedInputTokens;
-        this.enqueueEvent({
+        this.eventQueue.enqueue({
           type: 'usage_update',
           usage: {
             inputTokens,
@@ -613,7 +604,7 @@ export class CodexAgent extends BaseAgent {
     this.client.on('codex/error', (notification) => {
       this.debug(`[codex] Server error: ${notification.error?.message}`);
       for (const event of this.adapter.adaptError(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
@@ -621,7 +612,7 @@ export class CodexAgent extends BaseAgent {
     this.client.on('thread/compacted', (notification) => {
       this.debug(`[codex] Context compacted for thread ${notification.threadId}`);
       for (const event of this.adapter.adaptContextCompacted(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
@@ -634,7 +625,7 @@ export class CodexAgent extends BaseAgent {
     this.client.on('item/mcpToolCall/progress', (notification) => {
       this.debug(`[codex] MCP progress: ${notification.message}`);
       for (const event of this.adapter.adaptMcpToolCallProgress(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
@@ -647,14 +638,14 @@ export class CodexAgent extends BaseAgent {
     this.client.on('configWarning', (notification) => {
       this.debug(`[codex] Config warning: ${notification.summary}`);
       for (const event of this.adapter.adaptConfigWarning(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
     this.client.on('windows/worldWritableWarning', (notification) => {
       this.debug(`[codex] Windows security warning: ${notification.samplePaths.length} paths`);
       for (const event of this.adapter.adaptWindowsWarning(notification)) {
-        this.enqueueEvent(event);
+        this.eventQueue.enqueue(event);
       }
     });
 
@@ -1025,7 +1016,7 @@ export class CodexAgent extends BaseAgent {
             }
             this.debug(`PreToolUse: Source "${sourceSlug}" activated successfully`);
             // Emit source_activated event for UI
-            this.enqueueEvent({
+            this.eventQueue.enqueue({
               type: 'source_activated' as const,
               sourceSlug,
               originalMessage: this.currentUserMessage,
@@ -1092,6 +1083,8 @@ export class CodexAgent extends BaseAgent {
       const skillResult = qualifySkillName(
         modifiedInput || inputObj,
         workspaceSlug,
+        rootPath,
+        this.config.session?.workingDirectory,
         (msg) => this.debug(`PreToolUse: ${msg}`)
       );
       if (skillResult.modified) {
@@ -1516,38 +1509,7 @@ export class CodexAgent extends BaseAgent {
   // Event Queue Management (AsyncGenerator Pattern)
   // ============================================================
 
-  /**
-   * Add an event to the queue and signal waiters.
-   */
-  private enqueueEvent(event: AgentEvent): void {
-    this.eventQueue.push(event);
-    this.signalEventAvailable(false);
-  }
-
-  /**
-   * Signal that events are available.
-   */
-  private signalEventAvailable(done: boolean): void {
-    const resolvers = this.eventResolvers.splice(0);
-    for (const resolve of resolvers) {
-      resolve(done);
-    }
-  }
-
-  /**
-   * Wait for the next event.
-   */
-  private waitForEvent(): Promise<boolean> {
-    // If we have queued events, return immediately
-    if (this.eventQueue.length > 0 || this.turnComplete) {
-      return Promise.resolve(this.turnComplete && this.eventQueue.length === 0);
-    }
-
-    // Otherwise wait for signal
-    return new Promise((resolve) => {
-      this.eventResolvers.push(resolve);
-    });
-  }
+  // Event queue methods now provided by EventQueue class
 
   // ============================================================
   // Title Generation (via app-server)
@@ -1561,9 +1523,10 @@ export class CodexAgent extends BaseAgent {
   async generateTitle(prompt: string): Promise<string | null> {
     const client = await this.ensureClient();
 
-    // Use the cheapest model (Codex Mini) — title is just a 5-word summary
-    const miniModelId = getModelIdByShortName('Codex Mini');
-    const model = resolveCodexModelId(miniModelId, this.config.authType);
+    if (!this.config.miniModel) {
+      throw new Error('CodexAgent.generateTitle: config.miniModel is required');
+    }
+    const model = resolveCodexModelId(this.config.miniModel, this.config.authType);
 
     this.debug(`[generateTitle] Starting ephemeral thread with model=${model}`);
 
@@ -1685,9 +1648,7 @@ export class CodexAgent extends BaseAgent {
 
     this._isProcessing = true;
     this.abortReason = undefined;
-    this.turnComplete = false;
-    this.eventQueue = [];
-    this.eventResolvers = [];
+    this.eventQueue.reset();
     this.adapter.startTurn();
     this.currentUserMessage = message; // Store for source_activated events
 
@@ -1830,22 +1791,10 @@ export class CodexAgent extends BaseAgent {
       });
 
       // Yield events from queue until turn completes
-      while (true) {
-        const done = await this.waitForEvent();
+      yield* this.eventQueue.drain();
 
-        // Yield all queued events
-        while (this.eventQueue.length > 0) {
-          const event = this.eventQueue.shift()!;
-          yield event;
-        }
-
-        if (done) {
-          break;
-        }
-      }
-
-      // Emit complete if not already emitted
-      if (!this.turnComplete) {
+      // Emit complete if not already emitted by the adapter
+      if (!this.eventQueue.isComplete) {
         yield { type: 'complete' };
       }
 
@@ -2168,15 +2117,13 @@ export class CodexAgent extends BaseAgent {
         this.debug(`Failed to interrupt turn: ${e}`);
       }
     }
-    this.turnComplete = true;
-    this.signalEventAvailable(true);
+    this.eventQueue.complete();
     this.debug(`Aborted: ${reason || 'user stop'}`);
   }
 
   forceAbort(reason: AbortReason): void {
     this.abortReason = reason;
-    this.turnComplete = true;
-    this.signalEventAvailable(true);
+    this.eventQueue.complete();
     this.debug(`Force aborting: ${reason}`);
 
     // Clear pending permission/approval promises
@@ -2520,11 +2467,10 @@ export class CodexAgent extends BaseAgent {
       const client = await this.ensureClient();
       debug(`[CodexAgent.runMiniCompletion] Client connected`);
 
-      // Use a smaller model for quick completions
-      let model = this.config.miniModel ?? 'gpt-5-mini';
-      if (isCodexModel(model)) {
-        model = 'gpt-5-mini';
+      if (!this.config.miniModel) {
+        throw new Error('CodexAgent.runMiniCompletion: config.miniModel is required');
       }
+      const model = this.config.miniModel;
       debug(`[CodexAgent.runMiniCompletion] Using model: ${model}`);
 
       // Start an ephemeral thread with no system prompt

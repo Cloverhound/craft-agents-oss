@@ -48,7 +48,6 @@ function createMockApiSource(overrides: Partial<LoadedSource['config']> = {}): L
       enabled: true,
       provider: 'test',
       type: 'api',
-      isAuthenticated: true,
       api: {
         baseUrl: 'https://api.example.com',
         authType: 'bearer',
@@ -473,4 +472,3 @@ describe('generateCodexConfig warnings', () => {
     });
   });
 });
-

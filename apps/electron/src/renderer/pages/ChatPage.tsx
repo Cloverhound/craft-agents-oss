@@ -55,14 +55,14 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     labels,
     onSessionLabelsChange,
     enabledModes,
-    todoStates,
+    sessionStatuses,
     onSessionSourcesChange,
     onRenameSession,
     onFlagSession,
     onUnflagSession,
     onArchiveSession,
     onUnarchiveSession,
-    onTodoStateChange,
+    onSessionStatusChange,
     onDeleteSession,
     rightSidebarButton,
     sessionListSearchQuery,
@@ -266,7 +266,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   const isFlagged = session?.isFlagged || sessionMeta?.isFlagged || false
   const isArchived = session?.isArchived || sessionMeta?.isArchived || false
   const sharedUrl = session?.sharedUrl || sessionMeta?.sharedUrl || null
-  const currentTodoState = session?.todoState || sessionMeta?.todoState || 'todo'
+  const currentSessionStatus = session?.sessionStatus || sessionMeta?.sessionStatus || 'todo'
   const hasMessages = !!(session?.messages?.length || sessionMeta?.lastFinalMessageId)
   const hasUnreadMessages = sessionMeta
     ? !!(sessionMeta.lastFinalMessageId && sessionMeta.lastFinalMessageId !== sessionMeta.lastReadMessageId)
@@ -311,9 +311,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     onMarkSessionUnread(sessionId)
   }, [sessionId, onMarkSessionUnread])
 
-  const handleTodoStateChange = React.useCallback((state: string) => {
-    onTodoStateChange(sessionId, state)
-  }, [sessionId, onTodoStateChange])
+  const handleSessionStatusChange = React.useCallback((state: string) => {
+    onSessionStatusChange(sessionId, state)
+  }, [sessionId, onSessionStatusChange])
 
   const handleLabelsChange = React.useCallback((newLabels: string[]) => {
     onSessionLabelsChange?.(sessionId, newLabels)
@@ -449,8 +449,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       sharedUrl={sharedUrl}
       hasMessages={hasMessages}
       hasUnreadMessages={hasUnreadMessages}
-      currentTodoState={currentTodoState}
-      todoStates={todoStates ?? []}
+      currentSessionStatus={currentSessionStatus}
+      sessionStatuses={sessionStatuses ?? []}
       sessionLabels={sessionLabels}
       labels={labels ?? []}
       onLabelsChange={handleLabelsChange}
@@ -460,7 +460,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       onArchive={handleArchive}
       onUnarchive={handleUnarchive}
       onMarkUnread={handleMarkUnread}
-      onTodoStateChange={handleTodoStateChange}
+      onSessionStatusChange={handleSessionStatusChange}
       onOpenInNewWindow={handleOpenInNewWindow}
       onDelete={handleDelete}
     />
@@ -472,8 +472,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     sharedUrl,
     hasMessages,
     hasUnreadMessages,
-    currentTodoState,
-    todoStates,
+    currentSessionStatus,
+    sessionStatuses,
     sessionLabels,
     labels,
     handleLabelsChange,
@@ -483,7 +483,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     handleArchive,
     handleUnarchive,
     handleMarkUnread,
-    handleTodoStateChange,
+    handleSessionStatusChange,
     handleOpenInNewWindow,
     handleDelete,
   ])
@@ -536,8 +536,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
                 onInputChange={handleInputChange}
                 sources={enabledSources}
                 skills={skills}
-                todoStates={todoStates}
-                onTodoStateChange={handleTodoStateChange}
+                sessionStatuses={sessionStatuses}
+                onSessionStatusChange={handleSessionStatusChange}
                 workspaceId={activeWorkspaceId || undefined}
                 onSourcesChange={(slugs) => onSessionSourcesChange?.(sessionId, slugs)}
                 workingDirectory={sessionMeta.workingDirectory}
@@ -611,8 +611,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             skills={skills}
             labels={labels}
             onLabelsChange={(newLabels) => onSessionLabelsChange?.(sessionId, newLabels)}
-            todoStates={todoStates}
-            onTodoStateChange={handleTodoStateChange}
+            sessionStatuses={sessionStatuses}
+            onSessionStatusChange={handleSessionStatusChange}
             workspaceId={activeWorkspaceId || undefined}
             onSourcesChange={(slugs) => onSessionSourcesChange?.(sessionId, slugs)}
             workingDirectory={workingDirectory}

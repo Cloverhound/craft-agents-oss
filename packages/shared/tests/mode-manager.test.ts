@@ -1521,6 +1521,36 @@ describe('shouldAllowToolInMode - Bash plans folder exception', () => {
   // shouldAllowToolInMode uses SAFE_MODE_CONFIG which has empty patterns at test time
   // (patterns are loaded from default.json at runtime). Read-only bash command validation
   // is thoroughly tested via isReadOnlyBashCommandWithConfig + TEST_MODE_CONFIG above.
+
+  describe('should not produce false write errors for /dev/null redirects', () => {
+    it('should not claim 2>/dev/null is a write attempt', () => {
+      const command = 'ls -la /some/path 2>/dev/null || echo "not found"';
+      const result = shouldAllowToolInMode(
+        'Bash',
+        { command },
+        'safe',
+        { plansFolderPath }
+      );
+      // May be blocked for other reasons (e.g. no matching safe pattern),
+      // but should NOT say "appears to write files"
+      if (!result.allowed) {
+        expect(result.reason).not.toContain('appears to write files');
+      }
+    });
+
+    it('should not claim >/dev/null is a write attempt', () => {
+      const command = 'some-command >/dev/null 2>&1';
+      const result = shouldAllowToolInMode(
+        'Bash',
+        { command },
+        'safe',
+        { plansFolderPath }
+      );
+      if (!result.allowed) {
+        expect(result.reason).not.toContain('appears to write files');
+      }
+    });
+  });
 });
 
 // ============================================================

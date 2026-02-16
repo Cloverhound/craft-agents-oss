@@ -137,7 +137,7 @@ export function handleToolResult(
     id: generateMessageId(),
     role: 'tool',
     content: '',
-    timestamp: Date.now(),
+    timestamp: event.timestamp ?? Date.now(),
     toolUseId: event.toolUseId,
     toolName: event.toolName,
     toolResult: event.result,

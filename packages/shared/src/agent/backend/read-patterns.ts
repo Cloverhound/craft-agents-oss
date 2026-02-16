@@ -1,11 +1,11 @@
 /**
- * Read Pattern Detection for Codex Shell Commands
+ * Read Pattern Detection for Shell Commands
  *
  * Uses bash-parser to properly parse shell commands and detect file-reading
  * operations (sed, cat, head, tail). This handles shell wrappers, quoting,
  * and escaping correctly.
  *
- * Used by EventAdapter to emit these as "Read" tool events for better UI display.
+ * Used by event adapters to emit these as "Read" tool events for better UI display.
  */
 
 import bashParser from 'bash-parser';

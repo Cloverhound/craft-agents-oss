@@ -83,6 +83,12 @@ export interface PlatformActions {
   onReadFile?: (path: string) => Promise<string>
 
   /**
+   * Read a file as binary Uint8Array (Electron: fs.readFile via IPC)
+   * Used by PDF preview blocks that need raw binary data
+   */
+  onReadFileBinary?: (path: string) => Promise<Uint8Array>
+
+  /**
    * Reveal a file in the system file manager (Electron: shell.showItemInFolder)
    * Web: Not available (menu items hidden when undefined)
    */

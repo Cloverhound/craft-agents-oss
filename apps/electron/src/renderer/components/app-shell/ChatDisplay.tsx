@@ -149,9 +149,9 @@ interface ChatDisplayProps {
   onLabelsChange?: (labels: string[]) => void
   // State/status selection (for # menu and ActiveOptionBadges)
   /** Available workflow states */
-  todoStates?: import('@/config/todo-states').TodoState[]
+  sessionStatuses?: import('@/config/session-status-config').SessionStatus[]
   /** Callback when session state changes */
-  onTodoStateChange?: (stateId: string) => void
+  onSessionStatusChange?: (stateId: string) => void
   /** Workspace ID for loading skill icons */
   workspaceId?: string
   // Working directory (per session)
@@ -413,8 +413,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   labels,
   onLabelsChange,
   // States (for # menu and badge)
-  todoStates,
-  onTodoStateChange,
+  sessionStatuses,
+  onSessionStatusChange,
   workspaceId,
   // Working directory
   workingDirectory,
@@ -1616,9 +1616,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
               }}
               autoOpenLabelId={autoOpenLabelId}
               onAutoOpenConsumed={() => setAutoOpenLabelId(null)}
-              todoStates={todoStates}
-              currentTodoState={session.todoState || 'todo'}
-              onTodoStateChange={onTodoStateChange}
+              sessionStatuses={sessionStatuses}
+              currentSessionStatus={session.sessionStatus || 'todo'}
+              onSessionStatusChange={onSessionStatusChange}
             />
             )}
             <InputContainer
@@ -1668,7 +1668,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
               onWorkingDirectoryChange={onWorkingDirectoryChange}
               sessionFolderPath={sessionFolderPath}
               sessionId={session.id}
-              currentTodoState={session.todoState || 'todo'}
+              currentSessionStatus={session.sessionStatus || 'todo'}
               disableSend={disableSend || connectionUnavailable}
               connectionUnavailable={connectionUnavailable}
               isEmptySession={session.messages.length === 0}

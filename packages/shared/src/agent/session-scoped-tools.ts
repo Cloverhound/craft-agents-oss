@@ -40,6 +40,7 @@
  *
  * Source and Skill CRUD is done via standard file editing tools (Read/Write/Edit).
  * See ~/.craft-agent/docs/ for config format documentation.
+ * - render_template: Render a source's HTML template with data
  */
 
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
@@ -52,6 +53,13 @@ import { basename, join, normalize, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+
+// Feature flags
+import { FEATURE_FLAGS } from '../feature-flags.ts';
+
+// Template rendering
+import { loadTemplate, validateTemplateData } from '../templates/loader.ts';
+import { renderMustache } from '../templates/mustache.ts';
 
 // Import handlers from session-tools-core
 import {
@@ -295,6 +303,12 @@ const credentialPromptSchema = {
   passwordRequired: z.boolean().optional().describe('For basic auth: whether password is required'),
 };
 
+const renderTemplateSchema = {
+  source: z.string().describe('Source slug (e.g., "linear", "gmail")'),
+  template: z.string().describe('Template ID (e.g., "issue-detail", "issue-list")'),
+  data: z.record(z.string(), z.unknown()).describe('JSON data to render into the template'),
+};
+
 const transformDataSchema = {
   language: z.enum(['python3', 'node', 'bun']).describe('Script runtime to use'),
   script: z.string().describe('Transform script source code. Receives input file paths as command-line args (sys.argv[1:] or process.argv.slice(2)), last arg is the output file path.'),
@@ -402,19 +416,33 @@ Opens a browser window for the user to sign in with their Microsoft account.
 
 **IMPORTANT:** After calling this tool, execution will be paused while OAuth completes.`,
 
-  transform_data: `Transform data files using a script and write structured output for datatable/spreadsheet blocks.
+  render_template: `Render a source's HTML template with data.
 
-Use this tool when you need to transform large datasets (20+ rows) into structured JSON for display. Instead of outputting all rows inline, write a transform script that reads the input file and produces a JSON output file, then reference it via \`"src"\` in your datatable/spreadsheet block.
+Use this when a source provides HTML templates for rich rendering of its data (e.g., issue detail views, email threads, ticket summaries).
 
 **Workflow:**
-1. Call \`transform_data\` with a script that reads input files and writes JSON output
-2. Output a datatable/spreadsheet block with \`"src": "data/output.json"\` referencing the output file
+1. Fetch data from the source (via MCP tools or API calls)
+2. Call \`render_template\` with the source slug, template ID, and data
+3. Output an \`html-preview\` block with the returned file path as \`"src"\`
+
+**Available templates** are documented in each source's \`guide.md\` under the "Templates" section.
+
+Templates use Mustache syntax — the tool handles rendering and writes the output HTML to the session data folder.`,
+
+  transform_data: `Transform data files using a script and write structured output for datatable/spreadsheet blocks, or extract HTML content for html-preview blocks.
+
+Use this tool when you need to transform large datasets (20+ rows) into structured JSON for display, or extract/decode HTML content for rendering. Write a transform script that reads the input file and produces an output file, then reference it via \`"src"\` in your datatable/spreadsheet/html-preview/pdf-preview block.
+
+**Workflow:**
+1. Call \`transform_data\` with a script that reads input files and writes output
+2. Output a datatable/spreadsheet block with \`"src": "data/output.json"\`, an html-preview block with \`"src": "data/output.html"\`, or a pdf-preview block with \`"src": "data/output.pdf"\`
 
 **Script conventions:**
 - Input file paths are passed as command-line arguments (last arg = output file path)
 - Python: \`sys.argv[1:-1]\` = input files, \`sys.argv[-1]\` = output path
 - Node/Bun: \`process.argv.slice(2, -1)\` = input files, \`process.argv.at(-1)\` = output path
-- Output must be valid JSON: \`{"title": "...", "columns": [...], "rows": [...]}\`
+- For datatable/spreadsheet: output must be valid JSON: \`{"title": "...", "columns": [...], "rows": [...]}\`
+- For html-preview: output is an HTML file (any valid HTML)
 
 **Security:** Runs in an isolated subprocess with no access to API keys or credentials. 30-second timeout.`,
 
@@ -518,32 +546,46 @@ async function handleTransformData(
       delete env[key];
     }
 
-    // Spawn subprocess
+    // Spawn subprocess with manual timeout that escalates to SIGKILL.
+    // We can't rely on spawn()'s built-in `timeout` option because it only sends
+    // SIGTERM, which can be caught/ignored — leaving the promise hanging forever.
     const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolvePromise, reject) => {
       const child = spawn(cmd, spawnArgs, {
         cwd: dataDir,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: TRANSFORM_DATA_TIMEOUT_MS,
       });
 
       let stdout = '';
       let stderr = '';
+      let timedOut = false;
+
+      const killTimer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGKILL');
+      }, TRANSFORM_DATA_TIMEOUT_MS);
 
       child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
       child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
 
       child.on('close', (code) => {
-        resolvePromise({ stdout, stderr, code });
+        clearTimeout(killTimer);
+        if (timedOut) {
+          resolvePromise({ stdout, stderr: `Script timed out after ${TRANSFORM_DATA_TIMEOUT_MS / 1000}s and was killed`, code });
+        } else {
+          resolvePromise({ stdout, stderr, code });
+        }
       });
 
       child.on('error', (err) => {
+        clearTimeout(killTimer);
         reject(err);
       });
     });
 
     if (result.code !== 0) {
       const errorOutput = result.stderr || result.stdout || 'Script exited with non-zero code';
+      debug('session-scoped-tools', `transform_data failed (exit code ${result.code}): ${errorOutput.slice(0, 200)}`);
       return {
         content: [{ type: 'text', text: `Script failed (exit code ${result.code}):\n${errorOutput.slice(0, 2000)}` }],
         isError: true,
@@ -558,10 +600,10 @@ async function handleTransformData(
       };
     }
 
-    // Return the absolute path for use in the datatable/spreadsheet "src" field
+    // Return the absolute path for use in the datatable/spreadsheet/html-preview "src" field
     // The UI's file reader requires absolute paths for security validation
     const lines = [`Output written to: ${resolvedOutput}`];
-    lines.push(`\nUse this absolute path as the "src" value in your datatable or spreadsheet block.`);
+    lines.push(`\nUse this absolute path as the "src" value in your datatable, spreadsheet, html-preview, or pdf-preview block.`);
     if (result.stdout.trim()) {
       lines.push(`\nStdout:\n${result.stdout.slice(0, 500)}`);
     }
@@ -580,6 +622,85 @@ async function handleTransformData(
     // Clean up temp script
     try { unlinkSync(tempScript); } catch { /* ignore */ }
   }
+}
+
+// ============================================================
+// render_template Handler
+// ============================================================
+
+async function handleRenderTemplate(
+  sessionId: string,
+  workspaceRootPath: string,
+  args: {
+    source: string;
+    template: string;
+    data: Record<string, unknown>;
+  }
+): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
+  const sourcePath = join(workspaceRootPath, 'sources', args.source);
+
+  // Validate source exists
+  if (!existsSync(sourcePath)) {
+    return {
+      content: [{ type: 'text', text: `Error: Source "${args.source}" not found at ${sourcePath}` }],
+      isError: true,
+    };
+  }
+
+  // Load template
+  const template = loadTemplate(sourcePath, args.template);
+  if (!template) {
+    return {
+      content: [{ type: 'text', text: `Error: Template "${args.template}" not found for source "${args.source}".\n\nExpected file: ${join(sourcePath, 'templates', `${args.template}.html`)}` }],
+      isError: true,
+    };
+  }
+
+  // Soft validation
+  const warnings = validateTemplateData(template.meta, args.data);
+
+  // Render template
+  let rendered: string;
+  try {
+    rendered = renderMustache(template.content, args.data);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return {
+      content: [{ type: 'text', text: `Error rendering template "${args.template}": ${msg}` }],
+      isError: true,
+    };
+  }
+
+  // Write output to session data folder
+  const dataDir = getSessionDataPath(workspaceRootPath, sessionId);
+  if (!existsSync(dataDir)) {
+    mkdirSync(dataDir, { recursive: true });
+  }
+
+  const outputFileName = `${args.source}-${args.template}-${Date.now()}.html`;
+  const outputPath = join(dataDir, outputFileName);
+  writeFileSync(outputPath, rendered, 'utf-8');
+
+  // Build response
+  const lines: string[] = [];
+  lines.push(`Rendered template: ${template.meta.name || args.template}`);
+  lines.push(`Output: ${outputPath}`);
+  lines.push('');
+  lines.push(`Use this absolute path as the "src" value in your html-preview block.`);
+
+  if (warnings.length > 0) {
+    lines.push('');
+    lines.push('⚠ Warnings:');
+    for (const w of warnings) {
+      lines.push(`  - ${w.message}`);
+    }
+    lines.push('The template was rendered but may have blank sections. Consider re-rendering with the missing fields.');
+  }
+
+  debug('session-scoped-tools', `render_template succeeded: ${outputPath} (${warnings.length} warnings)`);
+  return {
+    content: [{ type: 'text', text: lines.join('\n') }],
+  };
 }
 
 // ============================================================
@@ -716,6 +837,13 @@ export function getSessionScopedTools(
     tool('transform_data', TOOL_DESCRIPTIONS.transform_data, transformDataSchema, async (args) => {
       return handleTransformData(sessionId, workspaceRootPath, args);
     }),
+
+    // render_template (feature-flagged)
+    ...(FEATURE_FLAGS.sourceTemplates ? [
+      tool('render_template', TOOL_DESCRIPTIONS.render_template, renderTemplateSchema, async (args) => {
+        return handleRenderTemplate(sessionId, workspaceRootPath, args);
+      }),
+    ] : []),
   ];
 
   // Create MCP server
